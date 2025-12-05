@@ -62,11 +62,14 @@ Server Start
 
 ## Version History & Key Enhancements
 
+**v1.1.7** - Balanced Worker Descriptions
+- Condensed Gemini description: "Metacognitive partner: feedback | critique | collaborate"
+- Expanded Claude description: codebase exploration, docs research, web search, multi-step investigation
+- Consolidated Gemini guidance into concise format
+
 **v1.1.6** - Simplify to Topic + Files
 - Removed `context` parameter - topic should include all context in one complete statement
 - Files now work for ANY Gemini mode (feedback, critique, collaborate) - not just collaborate
-- Strongly encourage file uploads so Gemini can understand project directly
-- Gemini has ZERO prior context - topic must be complete and specific
 
 **v1.1.5** - Gemini Zero Context Emphasis (superseded by v1.1.6)
 - Emphasized Gemini has ZERO prior context
