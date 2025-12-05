@@ -118,17 +118,17 @@ export async function spawnOrganizerWorker(
 }
 
 /**
- * Execute a Gemini worker for fast feedback/web research
+ * Execute a Gemini worker for fast feedback/collaboration
  *
  * Unlike Claude Code workers, Gemini workers:
- * 1. Execute synchronously (2-5 seconds)
- * 2. Use grounded search for web research
- * 3. Best for: metacognitive feedback, web search, alternative reasoning
+ * 1. Execute quickly (2-30 seconds depending on mode)
+ * 2. Can use grounded search when needed
+ * 3. Best for: metacognitive feedback, critique, deep collaboration
  */
 export async function executeGeminiWorker(
   researchId: string,
   topic: string,
-  workerType: 'feedback' | 'web' | 'critique' | 'collaborate',
+  workerType: 'feedback' | 'critique' | 'collaborate' | 'web',
   hint?: string,
   files?: string[],
   context?: string

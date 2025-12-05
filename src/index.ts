@@ -140,9 +140,11 @@ Use readResearch to inject completed results. Use waitFor to block until specifi
 Final thought auto-waits for all pending research.
 
 Worker types:
-- type:"gemini" (2-30s) - Fast feedback, critique, web search, or deep collaboration with files
-  workerType: "feedback" | "critique" | "web" | "collaborate"
-  For collaborate: include files:[] and context:"" for richer understanding
+- type:"gemini" (2-30s) - Fast feedback, critique, or deep collaboration
+  workerType: "feedback" | "critique" | "collaborate"
+  collaborate mode: upload files for Gemini to understand your project
+    files: ["./CLAUDE.md", "./src/index.ts"] - paths to upload
+    context: "explanation of what you need" - situational context
 - type:"claude" (45-90s) - Full capability: codebase, docs, complex research
 
 The structure is yours to decide. Fork when sub-queries can run independently.
@@ -165,8 +167,8 @@ Join results when you need them. Revise your thinking based on what you learn.`,
         topic: z.string().describe("Topic to research or message for collaboration"),
         type: z.enum(['claude', 'gemini']).optional().default('claude')
           .describe("Worker type: 'claude' (full capability, 45-90s) or 'gemini' (fast, 2-5s)"),
-        workerType: z.enum(['feedback', 'critique', 'web', 'collaborate']).optional()
-          .describe("For Gemini: 'feedback', 'critique', 'web', or 'collaborate' (deep context with files)"),
+        workerType: z.enum(['feedback', 'critique', 'collaborate']).optional()
+          .describe("For Gemini: 'feedback', 'critique', or 'collaborate' (deep context with files)"),
         hint: z.string().optional().describe("Optional hint for focus/decomposition"),
         files: z.array(z.string()).optional()
           .describe("File paths to upload to Gemini for context (collaborate mode)"),

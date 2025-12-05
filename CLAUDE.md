@@ -62,6 +62,11 @@ Server Start
 
 ## Version History & Key Enhancements
 
+**v1.1.3** - Delist Web from Tool Schema
+- Removed `web` from advertised workerType options in index.ts
+- Gemini still has grounded search capability internally
+- Avoids constraining Claude's perception of Gemini's purpose
+
 **v1.1.2** - Fix Gemini Blocking Bug
 - Gemini workers now fire-and-forget (don't await)
 - Previously: `await executeGeminiWorker()` blocked until Gemini returned
