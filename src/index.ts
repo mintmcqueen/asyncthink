@@ -247,9 +247,11 @@ Join results when you need them. Revise your thinking based on what you learn.`,
             };
           }
 
-          // Execute Gemini worker (fast for feedback/critique/web, slower for collaborate)
-          await executeGeminiWorker(scopedId, topic, geminiWorkerType, hint, files, context);
-          console.error(`[AsyncThink] Executed Gemini worker: ${id} (type: ${geminiWorkerType}, files: ${files?.length || 0})`);
+          // Fire Gemini worker (don't await - let it run async like Claude workers)
+          executeGeminiWorker(scopedId, topic, geminiWorkerType, hint, files, context)
+            .then(() => console.error(`[AsyncThink] Gemini worker completed: ${id}`))
+            .catch(err => console.error(`[AsyncThink] Gemini worker failed: ${id}: ${err.message}`));
+          console.error(`[AsyncThink] Forked Gemini worker: ${id} (type: ${geminiWorkerType}, files: ${files?.length || 0})`);
         } else {
           // Spawn Claude Code organizer worker (async, 45-90s)
           await spawnOrganizerWorker(scopedId, topic, hint);

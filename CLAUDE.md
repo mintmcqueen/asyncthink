@@ -62,6 +62,12 @@ Server Start
 
 ## Version History & Key Enhancements
 
+**v1.1.2** - Fix Gemini Blocking Bug
+- Gemini workers now fire-and-forget (don't await)
+- Previously: `await executeGeminiWorker()` blocked until Gemini returned
+- Now: Fire worker, continue immediately, collect results via `readResearch`
+- Gemini workers are now truly async like Claude workers
+
 **v1.1.1** - Enable, Don't Prescribe
 - Simplified tool description to follow AsyncThink paper's philosophy
 - Removed prescriptive "use in thoughts 1-3" guidance
