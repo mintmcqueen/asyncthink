@@ -10,6 +10,9 @@
  * Inspired by claudecode-mcp-async, rebuilt in TypeScript.
  */
 
+// Load environment variables from .env file (must be first)
+import 'dotenv/config';
+
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";

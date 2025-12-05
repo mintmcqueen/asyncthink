@@ -62,6 +62,12 @@ Server Start
 
 ## Version History & Key Enhancements
 
+**v1.1.9** - Publish Preparation
+- Added dotenv dependency for .env file support (`import 'dotenv/config'` in index.ts:6)
+- Created .gitignore to exclude node_modules, dist, coverage, .env files
+- Upgraded vitest to v4 to fix 6 moderate vulnerabilities (now 0)
+- Environment variables now loaded from .env file at startup
+
 **v1.1.8** - Clarify Intent Requirements for Both Workers
 - Files example is now suggestion, not mandate
 - Claude workers: "Has file access but still needs clear intent/context in topic"

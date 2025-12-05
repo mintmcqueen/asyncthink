@@ -20,13 +20,14 @@
     "@google/genai": "^1.31.0",
     "@modelcontextprotocol/sdk": "^1.24.0",
     "chalk": "^5.3.0",
+    "dotenv": "^17.2.3",
     "zod": "^4.1.13"
   },
   "devDependencies": {
     "@types/node": "^22",
-    "@vitest/coverage-v8": "^2.1.8",
+    "@vitest/coverage-v8": "^4.0.15",
     "shx": "^0.3.4",
     "typescript": "^5.3.3",
-    "vitest": "^2.1.8"
+    "vitest": "^4.0.15"
   }
 }
