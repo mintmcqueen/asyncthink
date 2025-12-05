@@ -62,11 +62,14 @@ Server Start
 
 ## Version History & Key Enhancements
 
-**v1.1.5** - Gemini Zero Context Emphasis
-- Emphasized Gemini has ZERO prior context - knows nothing about conversation/codebase/goals
-- `context` parameter now works for ALL Gemini modes (not just collaborate)
-- Clarified purpose of each param: topic (question), context (background), files (project understanding)
-- Specificity and detail are essential for meaningful feedback
+**v1.1.6** - Simplify to Topic + Files
+- Removed `context` parameter - topic should include all context in one complete statement
+- Files now work for ANY Gemini mode (feedback, critique, collaborate) - not just collaborate
+- Strongly encourage file uploads so Gemini can understand project directly
+- Gemini has ZERO prior context - topic must be complete and specific
+
+**v1.1.5** - Gemini Zero Context Emphasis (superseded by v1.1.6)
+- Emphasized Gemini has ZERO prior context
 
 **v1.1.4** - Emphasize Gemini Consultation Requirement
 - Added IMPORTANT guidance: seek Gemini feedback at milestones and before conclusions

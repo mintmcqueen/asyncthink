@@ -123,15 +123,15 @@ export async function spawnOrganizerWorker(
  * Unlike Claude Code workers, Gemini workers:
  * 1. Execute quickly (2-30 seconds depending on mode)
  * 2. Can use grounded search when needed
- * 3. Best for: metacognitive feedback, critique, deep collaboration
+ * 3. Support file uploads for context in ANY mode
+ * 4. Best for: metacognitive feedback, critique, deep collaboration
  */
 export async function executeGeminiWorker(
   researchId: string,
   topic: string,
   workerType: 'feedback' | 'critique' | 'collaborate' | 'web',
   hint?: string,
-  files?: string[],
-  context?: string
+  files?: string[]
 ): Promise<SpawnResult> {
   const ledger = getLedger();
   const config = getConfigManager();
@@ -164,20 +164,19 @@ export async function executeGeminiWorker(
 
     let result;
 
-    if (workerType === 'collaborate') {
-      // Deep collaboration mode with file upload
-      console.error(`[Orchestrator] Using collaboration mode with ${files?.length || 0} files`);
+    // Use collaborate() if files provided (any mode), otherwise generateContent()
+    if (files && files.length > 0) {
+      console.error(`[Orchestrator] Using file upload mode with ${files.length} files`);
       result = await geminiClient.collaborate({
         message: topic,
-        files: files || [],
-        context: context || hint,
-        enableGroundedSearch: false,
+        files: files,
+        context: hint,
+        enableGroundedSearch: workerType === 'web',
         maxTokens: 8000,
       });
     } else {
-      // Standard quick feedback mode - combine hint and context for full background
-      const fullContext = [hint, context].filter(Boolean).join('\n\n');
-      const prompt = formatGeminiPrompt(topic, workerType as 'feedback' | 'web' | 'critique', fullContext || undefined);
+      // No files - use quick prompt mode
+      const prompt = formatGeminiPrompt(topic, workerType as 'feedback' | 'web' | 'critique', hint);
       result = await geminiClient.generateContent({
         prompt,
         enableGroundedSearch: workerType === 'web',

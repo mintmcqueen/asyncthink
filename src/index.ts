@@ -142,20 +142,16 @@ Final thought auto-waits for all pending research.
 Worker types:
 - type:"gemini" (2-30s) - Metacognitive partner for feedback, critique, collaboration
   workerType: "feedback" | "critique" | "collaborate"
-  collaborate mode: upload files for Gemini to understand your project
-    files: ["./CLAUDE.md", "./src/index.ts"] - paths to upload
-    context: "explanation of what you need" - situational context
+  files: Upload files for ANY mode - Gemini can read your code/docs directly
 - type:"claude" (45-90s) - Full capability: codebase, docs, complex research
 
 IMPORTANT: Seek Gemini feedback at thought milestones and before conclusions.
 Minimum one Gemini consultation per session; multiple rounds strongly encouraged.
-Use feedback to validate reasoning, critique to stress-test assumptions, collaborate for deep review.
 
-ALWAYS provide context when consulting Gemini. Gemini has ZERO prior context - it knows nothing about
-your conversation, codebase, or goals. Specificity and detail are essential for meaningful feedback.
-- topic: Your question or the reasoning to evaluate (be specific and complete)
-- context: Situational background, what you're trying to achieve, relevant constraints
-- files: (collaborate mode) Upload files so Gemini can understand your project directly
+Gemini has ZERO prior context. It knows nothing about your conversation, codebase, or goals.
+- topic: Must be complete and specific - include all context in this single statement
+- files: Strongly encouraged - upload relevant files so Gemini understands your project
+  Example: files: ["./CLAUDE.md", "./src/index.ts"]
 
 The structure is yours to decide. Fork when sub-queries can run independently.
 Join results when you need them. Revise your thinking based on what you learn.`,
@@ -181,9 +177,7 @@ Join results when you need them. Revise your thinking based on what you learn.`,
           .describe("For Gemini: 'feedback', 'critique', or 'collaborate' (deep context with files)"),
         hint: z.string().optional().describe("Optional hint for focus/decomposition"),
         files: z.array(z.string()).optional()
-          .describe("File paths to upload to Gemini for context (collaborate mode)"),
-        context: z.string().optional()
-          .describe("Additional context/explanation for collaboration"),
+          .describe("File paths to upload to Gemini for context (any mode)"),
       }).optional().describe("Fork a research task"),
 
       readResearch: z.string().optional().describe("Research ID to read and inject results"),
@@ -223,7 +217,7 @@ Join results when you need them. Revise your thinking based on what you learn.`,
 
       // Handle forkResearch - spawn appropriate worker type
       if (args.forkResearch) {
-        const { id, topic, type = 'claude', workerType, hint, files, context } = args.forkResearch;
+        const { id, topic, type = 'claude', workerType, hint, files } = args.forkResearch;
         const scopedId = scopeTaskId(id);
 
         // Check if research ID already exists in this session
@@ -260,7 +254,7 @@ Join results when you need them. Revise your thinking based on what you learn.`,
           }
 
           // Fire Gemini worker (don't await - let it run async like Claude workers)
-          executeGeminiWorker(scopedId, topic, geminiWorkerType, hint, files, context)
+          executeGeminiWorker(scopedId, topic, geminiWorkerType, hint, files)
             .then(() => console.error(`[AsyncThink] Gemini worker completed: ${id}`))
             .catch(err => console.error(`[AsyncThink] Gemini worker failed: ${id}: ${err.message}`));
           console.error(`[AsyncThink] Forked Gemini worker: ${id} (type: ${geminiWorkerType}, files: ${files?.length || 0})`);
