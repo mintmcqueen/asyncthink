@@ -175,8 +175,9 @@ export async function executeGeminiWorker(
         maxTokens: 8000,
       });
     } else {
-      // Standard quick feedback mode
-      const prompt = formatGeminiPrompt(topic, workerType as 'feedback' | 'web' | 'critique', hint);
+      // Standard quick feedback mode - combine hint and context for full background
+      const fullContext = [hint, context].filter(Boolean).join('\n\n');
+      const prompt = formatGeminiPrompt(topic, workerType as 'feedback' | 'web' | 'critique', fullContext || undefined);
       result = await geminiClient.generateContent({
         prompt,
         enableGroundedSearch: workerType === 'web',

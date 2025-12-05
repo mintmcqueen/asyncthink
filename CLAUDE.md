@@ -62,11 +62,16 @@ Server Start
 
 ## Version History & Key Enhancements
 
+**v1.1.5** - Gemini Zero Context Emphasis
+- Emphasized Gemini has ZERO prior context - knows nothing about conversation/codebase/goals
+- `context` parameter now works for ALL Gemini modes (not just collaborate)
+- Clarified purpose of each param: topic (question), context (background), files (project understanding)
+- Specificity and detail are essential for meaningful feedback
+
 **v1.1.4** - Emphasize Gemini Consultation Requirement
 - Added IMPORTANT guidance: seek Gemini feedback at milestones and before conclusions
 - Minimum one Gemini consultation per session; multiple rounds encouraged
 - Positioned Gemini as "Metacognitive partner" in tool description
-- ALWAYS provide context via `topic` (question) and `context` (situational background)
 
 **v1.1.3** - Delist Web from Tool Schema
 - Removed `web` from advertised workerType options in index.ts

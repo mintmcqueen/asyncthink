@@ -150,7 +150,12 @@ Worker types:
 IMPORTANT: Seek Gemini feedback at thought milestones and before conclusions.
 Minimum one Gemini consultation per session; multiple rounds strongly encouraged.
 Use feedback to validate reasoning, critique to stress-test assumptions, collaborate for deep review.
-ALWAYS provide context when consulting Gemini. Use topic for your question, context for situational background.
+
+ALWAYS provide context when consulting Gemini. Gemini has ZERO prior context - it knows nothing about
+your conversation, codebase, or goals. Specificity and detail are essential for meaningful feedback.
+- topic: Your question or the reasoning to evaluate (be specific and complete)
+- context: Situational background, what you're trying to achieve, relevant constraints
+- files: (collaborate mode) Upload files so Gemini can understand your project directly
 
 The structure is yours to decide. Fork when sub-queries can run independently.
 Join results when you need them. Revise your thinking based on what you learn.`,
