@@ -78,10 +78,7 @@ server.registerTool(
   "asyncthink",
   {
     title: "AsyncThink",
-    description: `A detailed tool for dynamic and reflective problem-solving through thoughts,
-enhanced with async research workers that run in parallel.
-
-## Core: Sequential Thinking
+    description: `A detailed tool for dynamic and reflective problem-solving through thoughts.
 This tool helps analyze problems through a flexible thinking process that can adapt and evolve.
 Each thought can build on, question, or revise previous insights as understanding deepens.
 
@@ -90,110 +87,61 @@ When to use this tool:
 - Planning and design with room for revision
 - Analysis that might need course correction
 - Problems where the full scope might not be clear initially
-- Multi-step solutions that need context over steps
+- Problems that require a multi-step solution
+- Tasks that need to maintain context over multiple steps
 - Situations where irrelevant information needs to be filtered out
 
-Key sequential thinking features:
-- Adjust totalThoughts up or down as you progress
-- Question or revise previous thoughts
-- Add more thoughts even after reaching what seemed like the end
-- Express uncertainty and explore alternative approaches
-- Branch or backtrack - not every thought needs to build linearly
-- Generate and verify hypotheses
+Key features:
+- You can adjust totalThoughts up or down as you progress
+- You can question or revise previous thoughts
+- You can add more thoughts even after reaching what seemed like the end
+- You can express uncertainty and explore alternative approaches
+- Not every thought needs to build linearly - you can branch or backtrack
+- Generates a solution hypothesis
+- Verifies the hypothesis based on the Chain of Thought steps
+- Repeats the process until satisfied
+- Provides a correct answer
 
-## Enhancement: Async Research Workers
-Fork research tasks that run in parallel while you continue thinking.
-Two worker types available:
+Parameters explained:
+- thought: Your current thinking step, which can include:
+  * Regular analytical steps
+  * Revisions of previous thoughts
+  * Questions about previous decisions
+  * Realizations about needing more analysis
+  * Changes in approach
+  * Hypothesis generation
+  * Hypothesis verification
+- nextThoughtNeeded: True if you need more thinking, even if at what seemed like the end
+- thoughtNumber: Current number in sequence (can go beyond initial total if needed)
+- totalThoughts: Current estimate of thoughts needed (can be adjusted up/down)
+- isRevision: A boolean indicating if this thought revises previous thinking
+- revisesThought: If isRevision is true, which thought number is being reconsidered
+- branchFromThought: If branching, which thought number is the branching point
+- branchId: Identifier for the current branch (if any)
+- needsMoreThoughts: If reaching end but realizing more thoughts needed
 
-### Claude Code Workers (type: "claude") - 45-90 seconds
-Full capability subprocess with ALL tools. Use for:
-- **Repo/codebase investigations** (Read, Grep, Glob)
-- **Documentation research** (mcp__context7, mcp__deepwiki, mcp__repo-rag)
-- **Complex multi-step tasks** requiring tool chains
-- **Sidebar todos** that shouldn't block main thinking
+Async Research Enhancement:
+- forkResearch: Fork parallel research while you continue thinking
+  * type: "claude" (45-90s, full Claude Code for repo/docs) or "gemini" (2-5s, fast API)
+  * workerType: For gemini - "feedback" (get second opinion), "critique" (stress-test), "web" (Google Search)
+- waitFor: Block until specific research IDs complete
+- readResearch: Inject completed research results into thought stream
+- Output includes research.pending/completed arrays; final thought auto-waits and injects all results
 
-### Gemini Workers (type: "gemini") - 2-5 seconds
-Fast direct API calls. **REQUIRED** for:
-- **Metacognitive feedback** (workerType: "feedback") - Get alternative perspectives on your reasoning
-- **Critique/challenge** (workerType: "critique") - Stress-test your conclusions
-- **Web research** (workerType: "web") - Grounded Google Search for current info
-
-**IMPORTANT: Use Gemini workers for collaboration/feedback. Gemini can also do web research with grounded search.**
-
-Research workflow:
-1. **Fork**: Use forkResearch with type ("claude" or "gemini") and workerType for Gemini
-2. **Continue**: Keep thinking - Claude workers take 45-90s, Gemini takes 2-5s
-3. **Check**: OUTPUT includes research.completed when workers finish
-4. **Wait**: Use waitFor: ["id"] to BLOCK until research completes
-5. **Read**: Use readResearch to inject results into thought stream
-
-**CRITICAL for Claude workers: They take 45-90 seconds. Use waitFor mid-sequence if you need results.**
-**Gemini workers complete in 2-5 seconds - results usually ready by next thought.**
-
-## Parameters
-
-### Sequential Thinking (core)
-- thought: Your current thinking step (analysis, revision, hypothesis, etc.)
-- thoughtNumber: Current number in sequence (1, 2, 3...)
-- totalThoughts: Estimate of thoughts needed (adjustable)
-- nextThoughtNeeded: True if more thinking needed
-- isRevision: True if this revises previous thinking
-- revisesThought: Which thought is being reconsidered
-- branchFromThought: Branching point thought number
-- branchId: Identifier for the current branch
-- needsMoreThoughts: If reaching end but need more thoughts
-
-### Async Research (enhancement)
-- forkResearch: { id, topic, type?, workerType?, hint? } - Fork a research task
-  - type: "claude" (default, full capability) or "gemini" (fast feedback/web)
-  - workerType: For Gemini only - "feedback" | "critique" | "web"
-- readResearch: string - ID of research to inject into thought stream
-- waitFor: string[] - Block until these research IDs complete
-
-## Output
-Returns:
-- thoughtNumber, totalThoughts, nextThoughtNeeded (from input)
-- branches: List of branch IDs
-- thoughtHistoryLength: Number of thoughts so far
-- research: { pending: string[], completed: string[] }
-- researchResults: Injected results (if readResearch/waitFor used)
-- reminder: Status message about pending/completed research
-
-## Final Thought Behavior (nextThoughtNeeded: false)
-When ending a thinking session:
-1. **Auto-wait**: Automatically waits for ALL pending research to complete
-2. **Auto-inject**: All completed research results are injected into output
-3. **Cleanup**: All session tasks are deleted from ledger to prevent pollution
-
-## Example Workflows
-
-### Claude Code Worker (Repo Research)
-Thought 1: "Need to understand this codebase structure."
-  → forkResearch: { id: "repo", type: "claude", topic: "Explore src/ directory structure and key services" }
-
-Thought 2: "While that runs (45-90s), I'll review what I already know..."
-  → research.pending: ["repo"]
-
-Thought 3: "Let me wait for the codebase analysis."
-  → waitFor: ["repo"]
-  → researchResults with codebase findings
-
-### Gemini Worker (Metacognitive Feedback)
-Thought 1: "I think the bug is in the rate limiter because X, Y, Z..."
-  → forkResearch: { id: "critique", type: "gemini", workerType: "critique", topic: "My reasoning: The bug is in rate limiter because..." }
-
-Thought 2: "Gemini feedback is ready (2-5s). Let me check."
-  → research.completed: ["critique"]
-  → readResearch: "critique"
-  → Gemini suggests: "Consider also: connection pooling, timeout handling..."
-
-### Gemini Worker (Web Research)
-Thought 1: "Need current info on arXiv API changes."
-  → forkResearch: { id: "web", type: "gemini", workerType: "web", topic: "arXiv API changes 2024 2025" }
-
-Thought 2: "Web research is ready. Let me review."
-  → research.completed: ["web"]
-  → researchResults with grounded search findings`,
+You should:
+1. Start with an initial estimate of needed thoughts, but be ready to adjust
+2. Feel free to question or revise previous thoughts
+3. Don't hesitate to add more thoughts if needed, even at the "end"
+4. Express uncertainty when present
+5. Mark thoughts that revise previous thinking or branch into new paths
+6. Ignore information that is irrelevant to the current step
+7. Generate a solution hypothesis when appropriate
+8. Verify the hypothesis based on the Chain of Thought steps
+9. Repeat the process until satisfied with the solution
+10. Provide a single, ideally correct answer as the final output
+11. Only set nextThoughtNeeded to false when truly done and a satisfactory answer is reached
+12. Use forkResearch with type:"gemini" workerType:"feedback" to get a second opinion on your reasoning
+13. Use forkResearch with type:"claude" for codebase exploration or documentation research`,
     inputSchema: {
       // Sequential Thinking core
       thought: z.string().describe("Your current thinking step"),

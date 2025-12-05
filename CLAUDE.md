@@ -62,6 +62,12 @@ Server Start
 
 ## Version History & Key Enhancements
 
+**v1.0.1** - Sequential Thinking Preservation & Gemini Fix
+- Fixed Gemini grounded search: `tools` must be inside `config` object per @google/genai SDK
+- Restructured tool description to preserve original sequential thinking instructional style
+- Inlined `ThoughtInput` type into `thinking.ts` (removed `src/types/` barrel)
+- Tool description now ~65 lines (was 120), preserving original structure + minimal async docs
+
 **v1.0.0** - Hybrid Workers
 - Gemini workers for fast feedback (`src/lib/gemini-client.ts`)
 - Worker type routing in handler (`src/index.ts:274-300`)
@@ -91,9 +97,9 @@ Server Start
     - Config tool handler (lines 546-644) - Configuration management
 
 ### Business Logic Layer
-- **`src/lib/thinking.ts`** (95 lines) - Sequential thinking core
-  - **Dependencies**: `chalk`, `types/index.ts`
-  - **Purpose**: Thought processing, history, branching
+- **`src/lib/thinking.ts`** (110 lines) - Sequential thinking core
+  - **Dependencies**: `chalk`
+  - **Purpose**: Thought processing, history, branching; exports `ThoughtInput` type
   - **Key Class**: `AsyncThinkingServer`
     - `processThought()` - Main entry point (line 48)
     - `formatThought()` - Console formatting (line 20)
@@ -148,9 +154,9 @@ asyncthink/
 ├── tsconfig.json          # TypeScript config
 ├── vitest.config.ts       # Test config
 ├── src/
-│   ├── index.ts           # ★ MCP SERVER ENTRY POINT (663 LOC)
+│   ├── index.ts           # ★ MCP SERVER ENTRY POINT
 │   ├── lib/
-│   │   ├── thinking.ts    # Sequential thinking + ThoughtInput type (105 LOC)
+│   │   ├── thinking.ts    # Sequential thinking + ThoughtInput type (110 LOC)
 │   │   ├── orchestrator.ts # Worker spawning/management (414 LOC)
 │   │   ├── gemini-client.ts # Gemini API client (236 LOC)
 │   │   ├── ledger.ts      # Task state persistence (489 LOC)
@@ -223,6 +229,10 @@ All logs go to stderr (stdout reserved for MCP protocol):
 **Issue**: Gemini workers fail with "API key not found"
 **Diagnosis**: Check `GeminiClient.isAvailable()` returns false
 **Fix**: Set `GOOGLE_API_KEY` or `GEMINI_API_KEY` environment variable
+
+**Issue**: Gemini grounded search returns empty results
+**Diagnosis**: `tools` array at wrong level in API request
+**Fix**: Per @google/genai SDK, `tools` must be inside `config` object: `config.tools = [{ googleSearch: {} }]`
 
 **Issue**: Claude Code workers timeout
 **Diagnosis**: Check `[Orchestrator] Worker X timed out` in logs

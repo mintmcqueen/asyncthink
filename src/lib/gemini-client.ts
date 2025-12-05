@@ -120,16 +120,17 @@ export class GeminiClient {
       systemInstruction,
     } = params;
 
-    // Build generation config
+    // Build generation config - tools go INSIDE config per @google/genai SDK
     const config: any = {
       temperature,
       maxOutputTokens: maxTokens,
     };
 
     // Enable grounded search (Google Search tool) if requested
-    const tools = enableGroundedSearch
-      ? [{ googleSearch: {} }]
-      : undefined;
+    // Per SDK docs: tools must be nested inside config, not at request root
+    if (enableGroundedSearch) {
+      config.tools = [{ googleSearch: {} }];
+    }
 
     // Build contents
     const contents = [
@@ -145,10 +146,6 @@ export class GeminiClient {
       contents,
       config,
     };
-
-    if (tools) {
-      requestOptions.tools = tools;
-    }
 
     if (systemInstruction) {
       requestOptions.systemInstruction = {
