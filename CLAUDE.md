@@ -62,6 +62,12 @@ Server Start
 
 ## Version History & Key Enhancements
 
+**v1.1.4** - Emphasize Gemini Consultation Requirement
+- Added IMPORTANT guidance: seek Gemini feedback at milestones and before conclusions
+- Minimum one Gemini consultation per session; multiple rounds encouraged
+- Positioned Gemini as "Metacognitive partner" in tool description
+- ALWAYS provide context via `topic` (question) and `context` (situational background)
+
 **v1.1.3** - Delist Web from Tool Schema
 - Removed `web` from advertised workerType options in index.ts
 - Gemini still has grounded search capability internally

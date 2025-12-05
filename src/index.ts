@@ -140,12 +140,17 @@ Use readResearch to inject completed results. Use waitFor to block until specifi
 Final thought auto-waits for all pending research.
 
 Worker types:
-- type:"gemini" (2-30s) - Fast feedback, critique, or deep collaboration
+- type:"gemini" (2-30s) - Metacognitive partner for feedback, critique, collaboration
   workerType: "feedback" | "critique" | "collaborate"
   collaborate mode: upload files for Gemini to understand your project
     files: ["./CLAUDE.md", "./src/index.ts"] - paths to upload
     context: "explanation of what you need" - situational context
 - type:"claude" (45-90s) - Full capability: codebase, docs, complex research
+
+IMPORTANT: Seek Gemini feedback at thought milestones and before conclusions.
+Minimum one Gemini consultation per session; multiple rounds strongly encouraged.
+Use feedback to validate reasoning, critique to stress-test assumptions, collaborate for deep review.
+ALWAYS provide context when consulting Gemini. Use topic for your question, context for situational background.
 
 The structure is yours to decide. Fork when sub-queries can run independently.
 Join results when you need them. Revise your thinking based on what you learn.`,
