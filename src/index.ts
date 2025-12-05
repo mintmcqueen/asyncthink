@@ -120,14 +120,6 @@ Parameters explained:
 - branchId: Identifier for the current branch (if any)
 - needsMoreThoughts: If reaching end but realizing more thoughts needed
 
-Async Research Enhancement:
-- forkResearch: Fork parallel research while you continue thinking
-  * type: "claude" (45-90s, full Claude Code for repo/docs) or "gemini" (2-5s, fast API)
-  * workerType: For gemini - "feedback" (get second opinion), "critique" (stress-test), "web" (Google Search)
-- waitFor: Block until specific research IDs complete
-- readResearch: Inject completed research results into thought stream
-- Output includes research.pending/completed arrays; final thought auto-waits and injects all results
-
 You should:
 1. Start with an initial estimate of needed thoughts, but be ready to adjust
 2. Feel free to question or revise previous thoughts
@@ -140,8 +132,27 @@ You should:
 9. Repeat the process until satisfied with the solution
 10. Provide a single, ideally correct answer as the final output
 11. Only set nextThoughtNeeded to false when truly done and a satisfactory answer is reached
-12. Use forkResearch with type:"gemini" workerType:"feedback" to get a second opinion on your reasoning
-13. Use forkResearch with type:"claude" for codebase exploration or documentation research`,
+
+Async workers for parallel research (use while you continue thinking):
+
+GEMINI WORKERS - Your metacognitive thought partner (2-5s):
+Use in thoughts 1-3 to get feedback on your reasoning approach.
+- workerType:"feedback" - Second opinion on your hypothesis/approach
+- workerType:"critique" - Devil's advocate, stress-test assumptions
+- workerType:"web" - Grounded Google Search for facts
+PRE-DECOMPOSE your query before forking (Gemini cannot spawn sub-workers).
+Example: forkResearch: {id:"check", type:"gemini", workerType:"feedback", topic:"My hypothesis is X because Y. Am I missing anything?"}
+
+CLAUDE WORKERS - Heavy research capability (45-90s):
+Use when you need codebase exploration, documentation, or complex research.
+The worker decomposes and executes internally - just provide the topic.
+Example: forkResearch: {id:"research", type:"claude", topic:"How does library X handle Y?"}
+
+WORKFLOW:
+1. Fork workers early, continue reasoning in parallel (thoughts don't wait)
+2. When research.completed shows IDs, use readResearch to inject results
+3. REVISE your hypotheses based on evidence (isRevision: true)
+4. Final thought auto-waits for all pending research`,
     inputSchema: {
       // Sequential Thinking core
       thought: z.string().describe("Your current thinking step"),

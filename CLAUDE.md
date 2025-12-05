@@ -62,11 +62,18 @@ Server Start
 
 ## Version History & Key Enhancements
 
+**v1.0.2** - Reclaim Intent: Gemini as Metacognitive Partner
+- Repositioned Gemini workers as "metacognitive thought partner" for thoughts 1-3
+- Emphasized pre-decomposition requirement (Gemini can't spawn sub-workers)
+- Claude workers for heavy research (codebase, docs, web)
+- Added clear WORKFLOW section showing when to fork, read, and revise
+- Tool description now teaches INTENT, not just parameters
+
 **v1.0.1** - Sequential Thinking Preservation & Gemini Fix
 - Fixed Gemini grounded search: `tools` must be inside `config` object per @google/genai SDK
 - Restructured tool description to preserve original sequential thinking instructional style
 - Inlined `ThoughtInput` type into `thinking.ts` (removed `src/types/` barrel)
-- Tool description now ~65 lines (was 120), preserving original structure + minimal async docs
+- Tool description preserves original structure + minimal async docs
 
 **v1.0.0** - Hybrid Workers
 - Gemini workers for fast feedback (`src/lib/gemini-client.ts`)
