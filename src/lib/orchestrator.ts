@@ -128,8 +128,10 @@ export async function spawnOrganizerWorker(
 export async function executeGeminiWorker(
   researchId: string,
   topic: string,
-  workerType: 'feedback' | 'web' | 'critique',
-  hint?: string
+  workerType: 'feedback' | 'web' | 'critique' | 'collaborate',
+  hint?: string,
+  files?: string[],
+  context?: string
 ): Promise<SpawnResult> {
   const ledger = getLedger();
   const config = getConfigManager();
@@ -160,16 +162,28 @@ export async function executeGeminiWorker(
   try {
     const geminiClient = getGeminiClient();
 
-    // Format prompt based on worker type
-    const prompt = formatGeminiPrompt(topic, workerType, hint);
+    let result;
 
-    // Execute Gemini call with grounded search for web type
-    const result = await geminiClient.generateContent({
-      prompt,
-      enableGroundedSearch: workerType === 'web',
-      maxTokens: 4000,
-      temperature: workerType === 'critique' ? 0.8 : 0.7,
-    });
+    if (workerType === 'collaborate') {
+      // Deep collaboration mode with file upload
+      console.error(`[Orchestrator] Using collaboration mode with ${files?.length || 0} files`);
+      result = await geminiClient.collaborate({
+        message: topic,
+        files: files || [],
+        context: context || hint,
+        enableGroundedSearch: false,
+        maxTokens: 8000,
+      });
+    } else {
+      // Standard quick feedback mode
+      const prompt = formatGeminiPrompt(topic, workerType as 'feedback' | 'web' | 'critique', hint);
+      result = await geminiClient.generateContent({
+        prompt,
+        enableGroundedSearch: workerType === 'web',
+        maxTokens: 4000,
+        temperature: workerType === 'critique' ? 0.8 : 0.7,
+      });
+    }
 
     // Build structured result
     const structuredResult = {
@@ -182,6 +196,7 @@ export async function executeGeminiWorker(
       ],
       synthesis: result.text,
       groundingMetadata: result.groundingMetadata,
+      filesUploaded: files?.length || 0,
     };
 
     // Write result to task directory

@@ -135,23 +135,29 @@ You should:
 
 Async workers for parallel research (use while you continue thinking):
 
-GEMINI WORKERS - Your metacognitive thought partner (2-5s):
-Use in thoughts 1-3 to get feedback on your reasoning approach.
-- workerType:"feedback" - Second opinion on your hypothesis/approach
+GEMINI - Your collaborative thought partner:
+
+Quick modes (2-5s) - Use early (thoughts 1-3) for metacognitive feedback:
+- workerType:"feedback" - Second opinion on your reasoning
 - workerType:"critique" - Devil's advocate, stress-test assumptions
 - workerType:"web" - Grounded Google Search for facts
-PRE-DECOMPOSE your query before forking (Gemini cannot spawn sub-workers).
 Example: forkResearch: {id:"check", type:"gemini", workerType:"feedback", topic:"My hypothesis is X because Y. Am I missing anything?"}
 
-CLAUDE WORKERS - Heavy research capability (45-90s):
-Use when you need codebase exploration, documentation, or complex research.
-The worker decomposes and executes internally - just provide the topic.
+Deep collaboration (10-30s) - When context matters:
+- workerType:"collaborate" - Upload files, explain your situation fully
+- Include files: ["./CLAUDE.md", "./src/index.ts"] for Gemini to understand your codebase
+- Include context: "I'm building X, stuck on Y, considering Z"
+- Gemini becomes a true collaborator who understands your project
+Example: forkResearch: {id:"design-review", type:"gemini", workerType:"collaborate", files:["./CLAUDE.md","./src/index.ts"], topic:"Review my architecture", context:"Building an MCP server, want feedback on worker design"}
+
+CLAUDE WORKERS (45-90s) - Heavy research:
+Codebase exploration, documentation, complex multi-step research.
 Example: forkResearch: {id:"research", type:"claude", topic:"How does library X handle Y?"}
 
 WORKFLOW:
-1. Fork workers early, continue reasoning in parallel (thoughts don't wait)
-2. When research.completed shows IDs, use readResearch to inject results
-3. REVISE your hypotheses based on evidence (isRevision: true)
+1. Fork early, continue reasoning in parallel
+2. When research.completed shows IDs, use readResearch to inject
+3. REVISE hypotheses based on evidence (isRevision: true)
 4. Final thought auto-waits for all pending research`,
     inputSchema: {
       // Sequential Thinking core
@@ -168,12 +174,16 @@ WORKFLOW:
       // Async Research enhancement
       forkResearch: z.object({
         id: z.string().describe("Unique ID for this research task"),
-        topic: z.string().describe("Topic to research"),
+        topic: z.string().describe("Topic to research or message for collaboration"),
         type: z.enum(['claude', 'gemini']).optional().default('claude')
           .describe("Worker type: 'claude' (full capability, 45-90s) or 'gemini' (fast, 2-5s)"),
-        workerType: z.enum(['feedback', 'critique', 'web']).optional()
-          .describe("For Gemini only: 'feedback' (metacognitive), 'critique' (devil's advocate), 'web' (grounded search)"),
+        workerType: z.enum(['feedback', 'critique', 'web', 'collaborate']).optional()
+          .describe("For Gemini: 'feedback', 'critique', 'web', or 'collaborate' (deep context with files)"),
         hint: z.string().optional().describe("Optional hint for focus/decomposition"),
+        files: z.array(z.string()).optional()
+          .describe("File paths to upload to Gemini for context (collaborate mode)"),
+        context: z.string().optional()
+          .describe("Additional context/explanation for collaboration"),
       }).optional().describe("Fork a research task"),
 
       readResearch: z.string().optional().describe("Research ID to read and inject results"),
@@ -213,7 +223,7 @@ WORKFLOW:
 
       // Handle forkResearch - spawn appropriate worker type
       if (args.forkResearch) {
-        const { id, topic, type = 'claude', workerType, hint } = args.forkResearch;
+        const { id, topic, type = 'claude', workerType, hint, files, context } = args.forkResearch;
         const scopedId = scopeTaskId(id);
 
         // Check if research ID already exists in this session
@@ -249,9 +259,9 @@ WORKFLOW:
             };
           }
 
-          // Execute Gemini worker (fast, synchronous)
-          await executeGeminiWorker(scopedId, topic, geminiWorkerType, hint);
-          console.error(`[AsyncThink] Executed Gemini worker: ${id} (type: ${geminiWorkerType})`);
+          // Execute Gemini worker (fast for feedback/critique/web, slower for collaborate)
+          await executeGeminiWorker(scopedId, topic, geminiWorkerType, hint, files, context);
+          console.error(`[AsyncThink] Executed Gemini worker: ${id} (type: ${geminiWorkerType}, files: ${files?.length || 0})`);
         } else {
           // Spawn Claude Code organizer worker (async, 45-90s)
           await spawnOrganizerWorker(scopedId, topic, hint);

@@ -62,6 +62,13 @@ Server Start
 
 ## Version History & Key Enhancements
 
+**v1.1.0** - Deep Collaboration Mode
+- Added `workerType:"collaborate"` for context-rich Gemini collaboration
+- File upload support via `files: ["./path/to/file.ts"]` parameter
+- GeminiClient now supports `uploadFile()`, `uploadFiles()`, `collaborate()`
+- Gemini transforms from "tool" to "collaborator who understands your project"
+- Updated tool description with quick vs deep collaboration patterns
+
 **v1.0.2** - Reclaim Intent: Gemini as Metacognitive Partner
 - Repositioned Gemini workers as "metacognitive thought partner" for thoughts 1-3
 - Emphasized pre-decomposition requirement (Gemini can't spawn sub-workers)
@@ -120,12 +127,14 @@ Server Start
     - `checkAndCollectResults()` - Poll for completed workers (line 314)
     - `checkTimeouts()` - Handle timed-out workers (line 378)
 
-- **`src/lib/gemini-client.ts`** (236 lines) - Gemini API client
-  - **Dependencies**: `@google/genai`, `config.ts`
-  - **Purpose**: Direct Gemini API calls with grounded search
+- **`src/lib/gemini-client.ts`** (460 lines) - Gemini API client
+  - **Dependencies**: `@google/genai`, `config.ts`, `fs`, `path`
+  - **Purpose**: Gemini API calls with file upload and collaboration support
   - **Key Class**: `GeminiClient`
-    - `generateContent()` - Main API call (line 111)
-    - `isAvailable()` - Check for API key (line 213)
+    - `generateContent()` - Quick API call (line 111)
+    - `uploadFile()` / `uploadFiles()` - File upload to Gemini (lines 256, 308)
+    - `collaborate()` - Deep collaboration with files (line 319)
+    - `isAvailable()` - Check for API key (line 438)
 
 ### Data Layer
 - **`src/lib/ledger.ts`** (489 lines) - Task state persistence
