@@ -62,12 +62,18 @@ Server Start
 
 ## Version History & Key Enhancements
 
+**v1.1.1** - Enable, Don't Prescribe
+- Simplified tool description to follow AsyncThink paper's philosophy
+- Removed prescriptive "use in thoughts 1-3" guidance
+- Model decides when to fork based on reasoning needs
+- Key insight: "The structure is yours to decide"
+- Tool description now enables rather than constrains
+
 **v1.1.0** - Deep Collaboration Mode
 - Added `workerType:"collaborate"` for context-rich Gemini collaboration
 - File upload support via `files: ["./path/to/file.ts"]` parameter
 - GeminiClient now supports `uploadFile()`, `uploadFiles()`, `collaborate()`
 - Gemini transforms from "tool" to "collaborator who understands your project"
-- Updated tool description with quick vs deep collaboration patterns
 
 **v1.0.2** - Reclaim Intent: Gemini as Metacognitive Partner
 - Repositioned Gemini workers as "metacognitive thought partner" for thoughts 1-3

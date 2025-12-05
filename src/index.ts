@@ -133,32 +133,20 @@ You should:
 10. Provide a single, ideally correct answer as the final output
 11. Only set nextThoughtNeeded to false when truly done and a satisfactory answer is reached
 
-Async workers for parallel research (use while you continue thinking):
+Async Research - Fork workers to think concurrently while you continue reasoning:
 
-GEMINI - Your collaborative thought partner:
+Use forkResearch to delegate sub-queries. Workers run in parallel while you keep thinking.
+Use readResearch to inject completed results. Use waitFor to block until specific work completes.
+Final thought auto-waits for all pending research.
 
-Quick modes (2-5s) - Use early (thoughts 1-3) for metacognitive feedback:
-- workerType:"feedback" - Second opinion on your reasoning
-- workerType:"critique" - Devil's advocate, stress-test assumptions
-- workerType:"web" - Grounded Google Search for facts
-Example: forkResearch: {id:"check", type:"gemini", workerType:"feedback", topic:"My hypothesis is X because Y. Am I missing anything?"}
+Worker types:
+- type:"gemini" (2-30s) - Fast feedback, critique, web search, or deep collaboration with files
+  workerType: "feedback" | "critique" | "web" | "collaborate"
+  For collaborate: include files:[] and context:"" for richer understanding
+- type:"claude" (45-90s) - Full capability: codebase, docs, complex research
 
-Deep collaboration (10-30s) - When context matters:
-- workerType:"collaborate" - Upload files, explain your situation fully
-- Include files: ["./CLAUDE.md", "./src/index.ts"] for Gemini to understand your codebase
-- Include context: "I'm building X, stuck on Y, considering Z"
-- Gemini becomes a true collaborator who understands your project
-Example: forkResearch: {id:"design-review", type:"gemini", workerType:"collaborate", files:["./CLAUDE.md","./src/index.ts"], topic:"Review my architecture", context:"Building an MCP server, want feedback on worker design"}
-
-CLAUDE WORKERS (45-90s) - Heavy research:
-Codebase exploration, documentation, complex multi-step research.
-Example: forkResearch: {id:"research", type:"claude", topic:"How does library X handle Y?"}
-
-WORKFLOW:
-1. Fork early, continue reasoning in parallel
-2. When research.completed shows IDs, use readResearch to inject
-3. REVISE hypotheses based on evidence (isRevision: true)
-4. Final thought auto-waits for all pending research`,
+The structure is yours to decide. Fork when sub-queries can run independently.
+Join results when you need them. Revise your thinking based on what you learn.`,
     inputSchema: {
       // Sequential Thinking core
       thought: z.string().describe("Your current thinking step"),

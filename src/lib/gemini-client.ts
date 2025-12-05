@@ -40,10 +40,15 @@ export interface CollaborateParams {
   message: string;
   files?: string[];           // Paths to files to upload for context
   context?: string;           // Additional context/explanation
+  conversationId?: string;    // Continue existing conversation
   enableGroundedSearch?: boolean;
   maxTokens?: number;
   temperature?: number;
   model?: string;
+}
+
+export interface CollaborateResult extends GenerateResult {
+  conversationId: string;     // ID to continue this conversation
 }
 
 export interface UploadedFile {
