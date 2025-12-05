@@ -62,10 +62,14 @@ Server Start
 
 ## Version History & Key Enhancements
 
+**v1.1.8** - Clarify Intent Requirements for Both Workers
+- Files example is now suggestion, not mandate
+- Claude workers: "Has file access but still needs clear intent/context in topic"
+- Both worker types need clear topic - Gemini for context, Claude for intent
+
 **v1.1.7** - Balanced Worker Descriptions
 - Condensed Gemini description: "Metacognitive partner: feedback | critique | collaborate"
 - Expanded Claude description: codebase exploration, docs research, web search, multi-step investigation
-- Consolidated Gemini guidance into concise format
 
 **v1.1.6** - Simplify to Topic + Files
 - Removed `context` parameter - topic should include all context in one complete statement

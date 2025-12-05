@@ -142,11 +142,12 @@ Final thought auto-waits for all pending research.
 Worker types:
 - type:"gemini" (2-30s) - Metacognitive partner: feedback | critique | collaborate
   Gemini has ZERO context. Topic must be complete; files strongly encouraged.
+  Example: files: ["./src/index.ts", "./CLAUDE.md"]
 - type:"claude" (45-90s) - Full Claude Code capability for codebase exploration,
   documentation research, web search, and complex multi-step investigation.
+  Has file access but still needs clear intent/context in topic.
 
 IMPORTANT: Minimum one Gemini consultation per session at milestones or before conclusions.
-Multiple rounds encouraged. Always include files: ["./CLAUDE.md", "./relevant/files.ts"]
 
 The structure is yours to decide. Fork when sub-queries can run independently.
 Join results when you need them. Revise your thinking based on what you learn.`,
