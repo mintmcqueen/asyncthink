@@ -17,8 +17,9 @@
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { getDelegate, getThreadStore } from '../app.js';
+import { getDelegate, getThreadStore, getSkillRegistry } from '../app.js';
 import { sweepIdleOnce } from '../delegate/sweeper.js';
+import { resolveSkill } from '../skills/resolver.js';
 
 const DELEGATE_DESCRIPTION = `Hand a focused task to a single subordinate model CLI (claude, gemini, or codex). \
 The conversation runs as a thread you can continue across multiple calls by passing the returned threadId back in.
@@ -38,7 +39,8 @@ export function registerDelegateTools(server: McpServer): void {
       inputSchema: {
         adapter: z
           .enum(['claude', 'gemini', 'codex'])
-          .describe('Subordinate to dispatch to.'),
+          .optional()
+          .describe('Subordinate to dispatch to. Required if skill is not supplied.'),
         prompt: z.string().describe('Instruction or message for the subordinate.'),
         threadId: z
           .string()
@@ -51,7 +53,9 @@ export function registerDelegateTools(server: McpServer): void {
         skill: z
           .string()
           .optional()
-          .describe('Optional skill id (resolved by the registry; Phase 4).'),
+          .describe(
+            'Skill id from the registry. The skill\'s frontmatter supplies the adapter and a prompt prefix; caller may still override model/timeout.'
+          ),
         close: z
           .boolean()
           .optional()
@@ -63,16 +67,38 @@ export function registerDelegateTools(server: McpServer): void {
     },
     async (args) => {
       await sweepIdleOnce();
+
+      let adapter = args.adapter;
+      let prompt = args.prompt;
+      let model = args.model;
+      let timeoutMs = args.timeoutMs;
+      if (args.skill) {
+        const resolved = await resolveSkill(getSkillRegistry(), {
+          skill: args.skill,
+          callerPrompt: args.prompt,
+          callerAdapter: args.adapter,
+          callerModel: args.model,
+          callerTimeoutMs: args.timeoutMs,
+        });
+        adapter = resolved.adapter as typeof args.adapter;
+        prompt = resolved.prompt;
+        model = resolved.model;
+        timeoutMs = resolved.timeoutMs;
+      }
+      if (!adapter) {
+        throw new Error('delegate: either `adapter` or `skill` must be supplied.');
+      }
+
       const result = await getDelegate().run({
-        adapter: args.adapter,
-        prompt: args.prompt,
+        adapter,
+        prompt,
         threadId: args.threadId,
         files: args.files,
         skill: args.skill,
         close: args.close,
         cwd: args.cwd,
-        timeoutMs: args.timeoutMs,
-        model: args.model,
+        timeoutMs,
+        model,
       });
       return {
         content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],

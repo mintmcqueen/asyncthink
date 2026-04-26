@@ -58,9 +58,25 @@ The v2 refactor is underway on `developer/jb_a`. v1 source is preserved at `serv
 - **Rewrote CLAUDE.md** as a fully v2 document. v1 sections deleted; v1 history retained in this CHANGELOG only.
 - 85 unit + integration tests passing in CI mode.
 
+### Phase 4 — SkillRegistry + reference skills + slash commands
+
+- Implemented `FsSkillRegistry` (`server/src/stores/skillRegistry.ts`) with markdown-frontmatter loader supporting two locations: directory-style for plugin-shipped skills (`<plugin-root>/skills/<name>/SKILL.md`) and flat-style for user skills (`~/.config/asyncthink/skills/<name>.md`). User skills override plugin skills on id collision.
+- Added a small line-oriented YAML frontmatter parser (`parseFrontmatter`) supporting scalar strings, integers, floats, and booleans without pulling in a third-party YAML dependency. 6 parser unit tests + 6 registry unit tests.
+- `SkillResolver` (`server/src/skills/resolver.ts`) composes the resolved invocation: adapter from frontmatter (authoritative), prompt = body + `---` + caller's prompt, caller overrides for model/timeout. Errors via `SkillAdapterMismatchError` if caller passes a conflicting adapter, `SkillNotFoundError` for unknown skill ids. 6 resolver unit tests.
+- Wired `delegate` and `asyncthink` (forks) tool handlers to consult the registry when `skill` is supplied. `adapter` is now optional on both schemas — callers can pick by name alone.
+- Authored three reference skills:
+  - `skills/code-review/SKILL.md` (codex) — adversarial code review.
+  - `skills/architecture-critique/SKILL.md` (gemini) — independent architectural critique.
+  - `skills/test-design/SKILL.md` (claude) — coverage and behavior-test analysis.
+- Authored two slash commands wrapping these skills:
+  - `commands/critique.md` → `/asyncthink:critique`.
+  - `commands/review-pr.md` → `/asyncthink:review-pr`.
+- Integration test (`server/__tests__/integration/shippedSkills.test.ts`) verifies the production path-resolution loads all three shipped skills with valid adapter ids.
+- 106 unit + integration tests passing in CI mode.
+
 ### Planned
 
-- Phase 4: `SkillRegistry`, three reference skills, slash command wrappers.
+- Phase 5: `JsonlAuditLog`, `asyncthink_config` refactor (list_adapters/list_skills/reload_skills), v1 migration check, README, smoke tests, v2.0.0 tag, /branch-rotation.
 - Phase 3: `FsTaskStore`, council refactor, deletion of `server/src.v1/` and `@google/genai`.
 - Phase 4: `SkillRegistry`, three reference skills, slash command wrappers.
 - Phase 5: `JsonlAuditLog`, config tool refactor, migration, smoke tests, `v2.0.0` tag.

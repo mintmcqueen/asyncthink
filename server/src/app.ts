@@ -12,6 +12,7 @@ import { AdapterRegistry } from './adapters/index.js';
 import { LocalSubprocessExecutor } from './exec/localSubprocess.js';
 import { JsonlThreadStore } from './stores/jsonlThreadStore.js';
 import { FsTaskStore } from './stores/fsTaskStore.js';
+import { FsSkillRegistry } from './stores/skillRegistry.js';
 import { Delegate } from './delegate/delegate.js';
 import { Council } from './asyncthink/council.js';
 import { AsyncThinkingServer } from './asyncthink/thinking.js';
@@ -20,6 +21,7 @@ const adapters = AdapterRegistry.withDefaults();
 const executor = new LocalSubprocessExecutor();
 const threadStore = new JsonlThreadStore();
 const taskStore = new FsTaskStore();
+const skillRegistry = new FsSkillRegistry();
 const delegate = new Delegate(adapters, threadStore, executor);
 const council = new Council(adapters, threadStore, taskStore, executor);
 const thinking = new AsyncThinkingServer();
@@ -50,4 +52,8 @@ export function getCouncil(): Council {
 
 export function getThinking(): AsyncThinkingServer {
   return thinking;
+}
+
+export function getSkillRegistry(): FsSkillRegistry {
+  return skillRegistry;
 }

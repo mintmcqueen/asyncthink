@@ -1,6 +1,6 @@
 # AsyncThink MCP Server — Developer Documentation
 
-> **Status:** v2 refactor underway on `developer/jb_a`. Phases 0–3 complete (scaffold, adapters, delegate + threading, council). Phases 4–5 still ahead. Stable v1 behavior is at the **v1.1.9** git tag.
+> **Status:** v2 refactor underway on `developer/jb_a`. Phases 0–4 complete (scaffold, adapters, delegate + threading, council, skills). Phase 5 still ahead. Stable v1 behavior is at the **v1.1.9** git tag.
 
 ## Purpose
 
@@ -74,6 +74,41 @@ Threads are durable, append-only JSONL transcripts. The `delegate` tool dispatch
 1. Inline `close: true` on `delegate` for one-round-trip closure.
 2. Explicit `delegate_close` / `delegate_close_all` tools with reminder fields baked into every response.
 3. Idle sweeper at 6h (`server/src/delegate/sweeper.ts`) — runs on every tool call, rate-limited to once per 30s. On next session start, the sweeper hits any leftover stale threads.
+
+## Skills
+
+Skills are markdown-with-frontmatter delegation templates. They bind a specific adapter to a curated prompt body so that callers can invoke a workflow by name (`delegate({skill: "code-review"})`) instead of hand-crafting both the adapter and the prompt every time.
+
+**Storage:**
+- `<plugin-root>/skills/<name>/SKILL.md` — built-ins (committed to the plugin)
+- `~/.config/asyncthink/skills/<name>.md` — user-defined; overrides plugin skills with the same id
+
+**Frontmatter (YAML, line-oriented `key: value`):**
+```yaml
+---
+adapter: codex                # required
+description: Adversarial code review focusing on bugs and security
+files_glob: src/**/*.ts       # optional
+model: gpt-5.4                # optional
+timeout_ms: 240000            # optional
+---
+```
+
+The body of the markdown file is the **prompt prefix** — the system context that orients the subordinate before the caller's per-invocation prompt.
+
+**Resolution rules** (`server/src/skills/resolver.ts`):
+- Adapter from frontmatter is authoritative. If the caller passes a different adapter, the call errors (`SkillAdapterMismatchError`).
+- Caller's `model` and `timeoutMs` override the skill's defaults.
+- `prompt = skill.promptBody + "\n\n---\n\n" + caller.prompt`.
+
+**Built-in skills (Phase 4):**
+- `code-review` (codex) — adversarial review focused on bugs, security, concurrency, contract clarity. Globs to source extensions.
+- `architecture-critique` (gemini) — independent design critique of coupling, failure modes, scaling pressure points, evolution paths. Globs to docs and architecture markdown.
+- `test-design` (claude) — coverage analysis focused on intended behavior, weak assertions, missing acceptance tests at system boundaries.
+
+**Slash commands (Phase 4):**
+- `/asyncthink:critique` — wraps `delegate` with the architecture-critique skill.
+- `/asyncthink:review-pr` — wraps `delegate` with the code-review skill against the current branch's diff vs the integration branch.
 
 ## Council (asyncthink forks)
 

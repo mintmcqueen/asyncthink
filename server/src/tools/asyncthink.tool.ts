@@ -12,9 +12,10 @@
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { getCouncil, getThinking } from '../app.js';
+import { getCouncil, getThinking, getSkillRegistry } from '../app.js';
 import type { CouncilResult } from '../asyncthink/council.js';
 import { sweepIdleOnce } from '../delegate/sweeper.js';
+import { resolveSkill } from '../skills/resolver.js';
 
 const DEFAULT_FORK_TIMEOUT_MS = 180_000;
 
@@ -53,11 +54,15 @@ export function registerAsyncThinkTool(server: McpServer): void {
               id: z.string().describe('Caller-chosen fork id, unique within the chain.'),
               adapter: z
                 .enum(['claude', 'gemini', 'codex'])
-                .describe('Subordinate to dispatch to.'),
+                .optional()
+                .describe('Subordinate to dispatch to. Required if skill not supplied.'),
               prompt: z.string().describe('Fork-specific prompt.'),
               files: z.array(z.string()).optional(),
               model: z.string().optional(),
-              skill: z.string().optional(),
+              skill: z
+                .string()
+                .optional()
+                .describe('Skill id; supplies adapter + prompt prefix from the registry.'),
             })
           )
           .optional()
@@ -98,17 +103,34 @@ export function registerAsyncThinkTool(server: McpServer): void {
       if (thoughtResult.isError) return thoughtResult;
       const parsedThought = JSON.parse(thoughtResult.content[0].text) as Record<string, unknown>;
 
-      // 3. Spawn forks (fire-and-forget).
+      // 3. Spawn forks (fire-and-forget). Resolve skills first.
       const spawnErrors: { id: string; error: string }[] = [];
       if (args.forks) {
         for (const f of args.forks) {
           try {
+            let adapter = f.adapter;
+            let prompt = f.prompt;
+            let model = f.model;
+            if (f.skill) {
+              const resolved = await resolveSkill(getSkillRegistry(), {
+                skill: f.skill,
+                callerPrompt: f.prompt,
+                callerAdapter: f.adapter,
+                callerModel: f.model,
+              });
+              adapter = resolved.adapter as typeof f.adapter;
+              prompt = resolved.prompt;
+              model = resolved.model;
+            }
+            if (!adapter) {
+              throw new Error(`fork "${f.id}": either adapter or skill must be supplied.`);
+            }
             await council.fork({
               id: f.id,
-              adapter: f.adapter,
-              prompt: f.prompt,
+              adapter,
+              prompt,
               files: f.files,
-              model: f.model,
+              model,
               skill: f.skill,
               parentThreadId: chainId,
               thoughtNumber: args.thoughtNumber,
