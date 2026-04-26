@@ -2,7 +2,9 @@
 
 All notable changes to AsyncThink are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] — v2.0.0 in progress
+## [2.0.0] — 2026-04-26
+
+Ground-up refactor: subordinate-CLI adapter framework, threaded delegate tool, parallel council, skills, audit log. v1 reference code deleted; `@google/genai` dependency dropped. See per-phase entries below for implementation detail.
 
 The v2 refactor is underway on `developer/jb_a`. v1 source is preserved at `server/src.v1/` for reference and will be deleted in Phase 3. See `/Users/jb/.claude/plans/quiet-cooking-feigenbaum.md` for the full plan.
 
@@ -74,13 +76,22 @@ The v2 refactor is underway on `developer/jb_a`. v1 source is preserved at `serv
 - Integration test (`server/__tests__/integration/shippedSkills.test.ts`) verifies the production path-resolution loads all three shipped skills with valid adapter ids.
 - 106 unit + integration tests passing in CI mode.
 
-### Planned
+### Phase 5 — audit log, config refactor, migration, release
 
-- Phase 5: `JsonlAuditLog`, `asyncthink_config` refactor (list_adapters/list_skills/reload_skills), v1 migration check, README, smoke tests, v2.0.0 tag, /branch-rotation.
+- Implemented `JsonlAuditLog` (`server/src/stores/jsonlAuditLog.ts`): append-only JSONL at `~/.local/share/asyncthink/audit.jsonl`. Records every adapter invocation and thread lifecycle event with timestamp and pid. Failure-isolated: write errors log to stderr but do not break tool calls. 4 unit tests.
+- Wired audit log through `Council` and `Delegate` (optional 5th constructor arg; defaults to no-op for tests).
+- Refactored `asyncthink_config` tool with real actions: `list_adapters` (manifests + binary availability via `which` + env-readiness check), `list_skills` (Skill[] from registry with metadata), `reload_skills` (force re-scan). General `get`/`set`/`reset` reserved for v2.1.
+- Implemented v1→v2 migration check (`server/src/migrate.ts`): renames `~/.local/share/asyncthink/ledger.json` to `ledger.v1.json.bak` on first v2 startup, with one-line stderr warning. Idempotent. 3 unit tests.
+- Bumped plugin and server version to **2.0.0** (dropped `-alpha`).
+- README rewrite: install paths, adapter prerequisites, persistence layout, test mode (`RUN_LIVE=1`), skill authoring, migration notes.
+- Final CLAUDE.md pass.
+- 113 unit + integration tests passing in CI mode.
+
+## [1.1.9] — Prior release
 - Phase 3: `FsTaskStore`, council refactor, deletion of `server/src.v1/` and `@google/genai`.
 - Phase 4: `SkillRegistry`, three reference skills, slash command wrappers.
 - Phase 5: `JsonlAuditLog`, config tool refactor, migration, smoke tests, `v2.0.0` tag.
 
-## [1.1.9] — Prior release
+## [1.1.9] — Prior v1 release
 
 The last shipped v1 tag. See `git log v1.1.9` for v1 history.

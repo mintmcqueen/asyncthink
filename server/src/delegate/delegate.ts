@@ -14,6 +14,7 @@
 
 import { randomUUID } from 'crypto';
 import type { Adapter } from '../core/adapter.js';
+import type { AuditLog } from '../core/auditLog.js';
 import type { Executor } from '../core/executor.js';
 import type { ThreadStore, ThreadTurn } from '../core/threadStore.js';
 
@@ -60,7 +61,8 @@ export class Delegate {
   constructor(
     private readonly adapters: AdapterLookup,
     private readonly threadStore: ThreadStore,
-    private readonly executor: Executor
+    private readonly executor: Executor,
+    private readonly auditLog?: AuditLog
   ) {}
 
   async run(req: DelegateRequest): Promise<DelegateResponse> {
@@ -71,7 +73,15 @@ export class Delegate {
     }
 
     const threadId = req.threadId ?? newThreadId();
+    const wasNew = (await this.threadStore.read(threadId)).length === 0;
     await this.threadStore.open(threadId, adapter.id);
+    if (wasNew) {
+      await this.auditLog?.record({
+        kind: 'thread.open',
+        threadId,
+        adapter: adapter.id,
+      });
+    }
     const history = await this.threadStore.read(threadId);
 
     let effectivePrompt = req.prompt;
@@ -114,9 +124,22 @@ export class Delegate {
     };
     await this.threadStore.append(threadId, assistantTurn);
 
+    await this.auditLog?.record({
+      kind: 'invoke',
+      adapter: adapter.id,
+      durationMs: result.durationMs,
+      threadId,
+      error: result.exitCode !== 0 ? `exit code ${result.exitCode}` : undefined,
+    });
+
     const closed = !!req.close;
     if (closed) {
       await this.threadStore.close(threadId);
+      await this.auditLog?.record({
+        kind: 'thread.close',
+        threadId,
+        adapter: adapter.id,
+      });
     }
 
     return {

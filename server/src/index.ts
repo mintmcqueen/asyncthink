@@ -19,10 +19,14 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { registerAsyncThinkTool } from './tools/asyncthink.tool.js';
 import { registerDelegateTools } from './tools/delegate.tool.js';
 import { registerConfigTool } from './tools/config.tool.js';
+import { migrateV1Ledger } from './migrate.js';
+
+const migration = migrateV1Ledger();
+if (migration.warning) console.error(migration.warning);
 
 const server = new McpServer({
   name: 'asyncthink',
-  version: '2.0.0-alpha',
+  version: '2.0.0',
 });
 
 registerAsyncThinkTool(server);
@@ -32,7 +36,7 @@ registerConfigTool(server);
 async function runServer(): Promise<void> {
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error('[AsyncThink] v2 scaffold running on stdio (all tools stubbed)');
+  console.error('[AsyncThink] v2.0.0 running on stdio');
 }
 
 runServer().catch((error) => {

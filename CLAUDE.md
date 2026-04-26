@@ -1,6 +1,6 @@
 # AsyncThink MCP Server — Developer Documentation
 
-> **Status:** v2 refactor underway on `developer/jb_a`. Phases 0–4 complete (scaffold, adapters, delegate + threading, council, skills). Phase 5 still ahead. Stable v1 behavior is at the **v1.1.9** git tag.
+> **Status:** v2.0.0 released. All five refactor phases complete. The v1.1.9 git tag remains the historical pin for v1 behavior.
 
 ## Purpose
 
@@ -109,6 +109,12 @@ The body of the markdown file is the **prompt prefix** — the system context th
 **Slash commands (Phase 4):**
 - `/asyncthink:critique` — wraps `delegate` with the architecture-critique skill.
 - `/asyncthink:review-pr` — wraps `delegate` with the code-review skill against the current branch's diff vs the integration branch.
+
+## Audit log
+
+`JsonlAuditLog` (`server/src/stores/jsonlAuditLog.ts`) records every adapter invocation and thread-lifecycle event to `~/.local/share/asyncthink/audit.jsonl`. Each line is a JSON object: `{ts, pid, event}`. `event` is either `{kind:"invoke", adapter, durationMs, threadId?, error?}` or `{kind:"thread.open"|"thread.close", threadId, adapter}`.
+
+Built from day 1 even though v1 isn't SOC2-attested — capturing logs early means real audit data is available when the v3 cloud port pursues SOC2 Type 1. Failure-isolated: write errors log to stderr but do not break tool calls.
 
 ## Council (asyncthink forks)
 

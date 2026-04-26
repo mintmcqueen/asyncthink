@@ -15,6 +15,7 @@
 
 import { randomUUID } from 'crypto';
 import type { Adapter } from '../core/adapter.js';
+import type { AuditLog } from '../core/auditLog.js';
 import type { Executor } from '../core/executor.js';
 import type { TaskState, TaskStatus, TaskStore } from '../core/taskStore.js';
 import type { ThreadStore } from '../core/threadStore.js';
@@ -60,7 +61,8 @@ export class Council {
     private readonly adapters: AdapterLookup,
     private readonly threadStore: ThreadStore,
     private readonly taskStore: TaskStore,
-    private readonly executor: Executor
+    private readonly executor: Executor,
+    private readonly auditLog?: AuditLog
   ) {}
 
   newChain(): string {
@@ -100,6 +102,11 @@ export class Council {
   ): Promise<void> {
     try {
       await this.threadStore.open(childThreadId, adapter.id);
+      await this.auditLog?.record({
+        kind: 'thread.open',
+        threadId: childThreadId,
+        adapter: adapter.id,
+      });
       await this.threadStore.append(childThreadId, {
         ts: new Date().toISOString(),
         role: 'user',
@@ -128,10 +135,25 @@ export class Council {
         error: result.exitCode !== 0 ? `exit code ${result.exitCode}` : undefined,
         durationMs: result.durationMs,
       });
+      await this.auditLog?.record({
+        kind: 'invoke',
+        adapter: adapter.id,
+        durationMs: result.durationMs,
+        threadId: childThreadId,
+        error: result.exitCode !== 0 ? `exit code ${result.exitCode}` : undefined,
+      });
     } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
       await this.taskStore.update(taskId, {
         status: 'failed',
-        error: err instanceof Error ? err.message : String(err),
+        error: message,
+      });
+      await this.auditLog?.record({
+        kind: 'invoke',
+        adapter: adapter.id,
+        durationMs: 0,
+        threadId: childThreadId,
+        error: message,
       });
     }
   }
@@ -203,6 +225,11 @@ export class Council {
     for (const t of await this.threadStore.list()) {
       if (t.threadId.startsWith(prefix)) {
         await this.threadStore.close(t.threadId);
+        await this.auditLog?.record({
+          kind: 'thread.close',
+          threadId: t.threadId,
+          adapter: t.adapter,
+        });
       }
     }
     // Prune tasks from the store.
