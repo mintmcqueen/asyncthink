@@ -1,0 +1,7 @@
+{
+  "name": "delegate-placeholder",
+  "tool": "delegate",
+  "phase": 0,
+  "note": "Real spec lands in Phase 2 (delegate + thread store). This file is a structural placeholder only.",
+  "steps": []
+}

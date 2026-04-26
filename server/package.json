@@ -1,7 +1,7 @@
 {
   "name": "asyncthink",
-  "version": "1.0.0",
-  "description": "MCP server for sequential thinking enhanced with async research workers",
+  "version": "2.0.0-alpha",
+  "description": "MCP server: sequential thinking + parallel competitor council + threaded delegation to subordinate model CLIs (read-only)",
   "license": "MIT",
   "type": "module",
   "bin": {
@@ -12,7 +12,7 @@
   ],
   "scripts": {
     "build": "tsc && shx chmod +x dist/*.js",
-    "prepare": "npm run build",
+    "prepare": "git config core.hooksPath .githooks && npm run build",
     "watch": "tsc --watch",
     "test": "vitest run --coverage"
   },

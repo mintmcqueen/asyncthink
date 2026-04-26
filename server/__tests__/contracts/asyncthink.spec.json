@@ -1,0 +1,7 @@
+{
+  "name": "asyncthink-placeholder",
+  "tool": "asyncthink",
+  "phase": 0,
+  "note": "Real spec lands in Phase 3 (council). This file is a structural placeholder only.",
+  "steps": []
+}

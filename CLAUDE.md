@@ -1,5 +1,13 @@
 # AsyncThink MCP Server - Developer Documentation
 
+> ## ⚠️ v2 refactor in progress on this branch
+>
+> **Status:** Phase 0 scaffold complete. The server now lives at `server/`; the v1 source has been preserved at `server/src.v1/` for reference and will be deleted in Phase 3. All MCP tools currently return a `v2 in progress` notice — for stable behavior, pin to the **v1.1.9** git tag.
+>
+> **Plan:** `/Users/jb/.claude/plans/quiet-cooking-feigenbaum.md` (5 phases, single v2.0.0 release at end).
+>
+> The body of this document still describes v1 architecture. It is rewritten phase-by-phase via `/doc-guard`; full v2 rewrite lands at the end of Phase 3.
+
 **Version 1.0.0** - Sequential Thinking + Hybrid Async Research Workers
 
 ## System Overview & Current Status
