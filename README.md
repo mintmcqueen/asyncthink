@@ -1,155 +1,116 @@
-# Sequential Thinking MCP Server
+# AsyncThink
 
-An MCP server implementation that provides a tool for dynamic and reflective problem-solving through a structured thinking process.
+A Claude Code plugin (and MCP server) for sequential thinking with parallel forks to subordinate model CLIs (claude, gemini, codex). Convene a "council" of independent perspectives during a deliberation, or hand a focused task to a single subordinate via a threaded conversation. All subordinates are read-only — they may navigate files but never edit, exec, or write.
 
 ## Features
 
-- Break down complex problems into manageable steps
-- Revise and refine thoughts as understanding deepens
-- Branch into alternative paths of reasoning
-- Adjust the total number of thoughts dynamically
-- Generate and verify solution hypotheses
+- **Sequential thinking** with structured thoughts, branching, and revision tracking.
+- **Parallel council** — fan out fire-and-forget forks to multiple subordinate adapters within a single thought; collect results later.
+- **Threaded delegation** — open a `delegate` thread with one subordinate, persist transcripts, continue across multiple calls. Codex uses native session resume; claude and gemini use replay strategy.
+- **Skill registry** — bind adapter + prompt prefix to a named skill (`code-review`, `architecture-critique`, `test-design` ship in v2.0.0).
+- **Read-only enforcement** per adapter (`claude --print`, `gemini --approval-mode plan`, `codex --sandbox read-only`).
+- **Audit log** — append-only JSONL of every adapter invocation and thread lifecycle event.
+- **XDG-compliant persistence** at `~/.local/share/asyncthink/` (threads, tasks, audit log).
 
-## Tool
+## Install
 
-### sequential_thinking
+### As a Claude Code plugin (development)
 
-Facilitates a detailed, step-by-step thinking process for problem-solving and analysis.
-
-**Inputs:**
-- `thought` (string): The current thinking step
-- `nextThoughtNeeded` (boolean): Whether another thought step is needed
-- `thoughtNumber` (integer): Current thought number
-- `totalThoughts` (integer): Estimated total thoughts needed
-- `isRevision` (boolean, optional): Whether this revises previous thinking
-- `revisesThought` (integer, optional): Which thought is being reconsidered
-- `branchFromThought` (integer, optional): Branching point thought number
-- `branchId` (string, optional): Branch identifier
-- `needsMoreThoughts` (boolean, optional): If more thoughts are needed
-
-## Usage
-
-The Sequential Thinking tool is designed for:
-- Breaking down complex problems into steps
-- Planning and design with room for revision
-- Analysis that might need course correction
-- Problems where the full scope might not be clear initially
-- Tasks that need to maintain context over multiple steps
-- Situations where irrelevant information needs to be filtered out
-
-## Configuration
-
-### Usage with Claude Desktop
-
-Add this to your `claude_desktop_config.json`:
-
-#### npx
-
-```json
-{
-  "mcpServers": {
-    "sequential-thinking": {
-      "command": "npx",
-      "args": [
-        "-y",
-        "@modelcontextprotocol/server-sequential-thinking"
-      ]
-    }
-  }
-}
+From a directory containing this repo:
+```sh
+claude --plugin-dir ./asyncthink
 ```
 
-#### docker
+This loads the plugin and exposes its tools and slash commands in your Claude Code session.
 
-```json
-{
-  "mcpServers": {
-    "sequentialthinking": {
-      "command": "docker",
-      "args": [
-        "run",
-        "--rm",
-        "-i",
-        "mcp/sequentialthinking"
-      ]
-    }
-  }
-}
+### As a standalone MCP server
+
+```sh
+cd server
+npm install
+npm run build
 ```
 
-To disable logging of thought information set env var: `DISABLE_THOUGHT_LOGGING` to `true`.
-Comment
+Then point your MCP client at `server/dist/index.js`.
 
-### Usage with VS Code
+## Prerequisites
 
-For quick installation, click one of the installation buttons below...
+You need at least one of the subordinate CLIs installed and authenticated:
 
-[![Install with NPX in VS Code](https://img.shields.io/badge/VS_Code-NPM-0098FF?style=flat-square&logo=visualstudiocode&logoColor=white)](https://insiders.vscode.dev/redirect/mcp/install?name=sequentialthinking&config=%7B%22command%22%3A%22npx%22%2C%22args%22%3A%5B%22-y%22%2C%22%40modelcontextprotocol%2Fserver-sequential-thinking%22%5D%7D) [![Install with NPX in VS Code Insiders](https://img.shields.io/badge/VS_Code_Insiders-NPM-24bfa5?style=flat-square&logo=visualstudiocode&logoColor=white)](https://insiders.vscode.dev/redirect/mcp/install?name=sequentialthinking&config=%7B%22command%22%3A%22npx%22%2C%22args%22%3A%5B%22-y%22%2C%22%40modelcontextprotocol%2Fserver-sequential-thinking%22%5D%7D&quality=insiders)
+| Adapter | Binary | Auth |
+| --- | --- | --- |
+| `claude` | `claude` (Claude Code CLI) | inherits user's authenticated session |
+| `gemini` | `gemini` (Google Gemini CLI) | `GEMINI_API_KEY` or `GOOGLE_API_KEY` |
+| `codex` | `codex` (OpenAI Codex CLI) | `codex login` or `OPENAI_API_KEY` |
 
-[![Install with Docker in VS Code](https://img.shields.io/badge/VS_Code-Docker-0098FF?style=flat-square&logo=visualstudiocode&logoColor=white)](https://insiders.vscode.dev/redirect/mcp/install?name=sequentialthinking&config=%7B%22command%22%3A%22docker%22%2C%22args%22%3A%5B%22run%22%2C%22--rm%22%2C%22-i%22%2C%22mcp%2Fsequentialthinking%22%5D%7D) [![Install with Docker in VS Code Insiders](https://img.shields.io/badge/VS_Code_Insiders-Docker-24bfa5?style=flat-square&logo=visualstudiocode&logoColor=white)](https://insiders.vscode.dev/redirect/mcp/install?name=sequentialthinking&config=%7B%22command%22%3A%22docker%22%2C%22args%22%3A%5B%22run%22%2C%22--rm%22%2C%22-i%22%2C%22mcp%2Fsequentialthinking%22%5D%7D&quality=insiders)
+The adapter manifests target current upstream flag sets (gemini-cli with `--output-format`, `--approval-mode`, `--include-directories`, `--resume`; codex v0.47+). Older CLI versions may not work with the modern flag set.
 
-For manual installation, you can configure the MCP server using one of these methods:
+## Tools
 
-**Method 1: User Configuration (Recommended)**
-Add the configuration to your user-level MCP configuration file. Open the Command Palette (`Ctrl + Shift + P`) and run `MCP: Open User Configuration`. This will open your user `mcp.json` file where you can add the server configuration.
+| Tool | Purpose |
+| --- | --- |
+| `asyncthink` | Sequential thinking + parallel forks. Auto-closes chain on `nextThoughtNeeded:false`. |
+| `delegate` | Open or continue a single-subordinate thread. Inline `close: true` for one-round-trip. |
+| `delegate_close` | Close a thread (idempotent). |
+| `delegate_close_all` | End-of-session safety net. |
+| `delegate_list_threads` | List open threads with adapter and idle time. |
+| `asyncthink_config` | `list_adapters`, `list_skills`, `reload_skills`. |
 
-**Method 2: Workspace Configuration**
-Alternatively, you can add the configuration to a file called `.vscode/mcp.json` in your workspace. This will allow you to share the configuration with others.
+### Slash commands (Claude Code)
 
-> For more details about MCP configuration in VS Code, see the [official VS Code MCP documentation](https://code.visualstudio.com/docs/copilot/customization/mcp-servers).
+- `/asyncthink:critique [topic]` — independent architectural critique via gemini.
+- `/asyncthink:review-pr [focus]` — adversarial code review of the current branch's diff via codex.
 
-For NPX installation:
+## Authoring a skill
 
-```json
-{
-  "servers": {
-    "sequential-thinking": {
-      "command": "npx",
-      "args": [
-        "-y",
-        "@modelcontextprotocol/server-sequential-thinking"
-      ]
-    }
-  }
-}
+Drop a markdown file under `~/.config/asyncthink/skills/<name>.md`:
+
+```markdown
+---
+adapter: codex
+description: What this skill is for and when to use it
+files_glob: src/**/*.ts
+model: gpt-5.4
+timeout_ms: 240000
+---
+
+You are <persona>. Your job is to <task>.
+
+(prompt prefix that orients the subordinate)
 ```
 
-For Docker installation:
+User skills override plugin-shipped skills with the same id. After editing, run `asyncthink_config({action: "reload_skills"})` to pick up the change.
 
-```json
-{
-  "servers": {
-    "sequential-thinking": {
-      "command": "docker",
-      "args": [
-        "run",
-        "--rm",
-        "-i",
-        "mcp/sequentialthinking"
-      ]
-    }
-  }
-}
+## Persistence
+
+```
+~/.local/share/asyncthink/
+├── threads/<threadId>.jsonl                    # active conversation transcripts
+├── threads/closed/<threadId>.jsonl             # closed transcripts (retained for inspection)
+├── tasks/<sanitizedTaskId>/state.json          # in-flight worker state (debug)
+└── audit.jsonl                                 # append-only audit log
 ```
 
-### Usage with Codex CLI
+## Test mode
 
-Run the following:
+CI runs unit and integration tests with a fake `Executor` injected at the OS-process boundary. Live tests hit real CLIs and are gated:
 
-#### npx
-
-```bash
-codex mcp add sequential-thinking npx -y @modelcontextprotocol/server-sequential-thinking
+```sh
+cd server
+npm test                  # unit + integration (fast, no API keys needed)
+RUN_LIVE=1 npm test       # also runs live/* tests against real CLIs
 ```
 
-## Building
+Live tests exercise PONG round-trips, multi-turn conversations (codex native resume; claude/gemini replay), and a 3-fork council. They require the relevant CLIs installed and authenticated.
 
-Docker:
+## Architecture
 
-```bash
-docker build -t mcp/sequentialthinking -f src/sequentialthinking/Dockerfile .
-```
+See `CLAUDE.md` for the developer-facing architecture document covering adapters, threading, council, the storage interfaces (`ThreadStore`, `TaskStore`, `AuditLog`, `SkillRegistry`), and the v3 cloud port plan.
+
+## v1 → v2 migration
+
+If you ran a previous v1.x install, your old `~/.local/share/asyncthink/ledger.json` will be renamed to `ledger.v1.json.bak` on first v2 startup. v2 uses a different state layout under `tasks/`. In-flight v1 tasks were stale by definition after a server restart; nothing is lost.
 
 ## License
 
-This MCP server is licensed under the MIT License. This means you are free to use, modify, and distribute the software, subject to the terms and conditions of the MIT License. For more details, please see the LICENSE file in the project repository.
+MIT.

@@ -1,0 +1,46 @@
+{
+  "name": "delegate-multi-turn-then-close",
+  "tool": "delegate",
+  "description": "Open a thread, follow up using the returned threadId, close on the third turn.",
+  "steps": [
+    {
+      "input": {
+        "adapter": "fake-replay",
+        "prompt": "remember the codeword: BANANA"
+      },
+      "expect": {
+        "threadId": "@nonempty",
+        "adapter": "fake-replay",
+        "output": "@nonempty",
+        "closed": false,
+        "turn": 1
+      }
+    },
+    {
+      "input": {
+        "adapter": "fake-replay",
+        "prompt": "what is the codeword?",
+        "threadId": "@from:steps[0].threadId"
+      },
+      "expect": {
+        "threadId": "@from:steps[0].threadId",
+        "turn": 2,
+        "closed": false
+      }
+    },
+    {
+      "input": {
+        "adapter": "fake-replay",
+        "prompt": "thanks, we are done",
+        "threadId": "@from:steps[0].threadId",
+        "close": true
+      },
+      "expect": {
+        "threadId": "@from:steps[0].threadId",
+        "turn": 3,
+        "closed": true,
+        "reminder": "Thread closed."
+      }
+    }
+  ]
+}

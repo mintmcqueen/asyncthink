@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# git-guard:shim v1
+
+# Managed by git-guard. To refresh:
+#   bash ~/.claude/skills/git-guard/scripts/install.sh
+set -e
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+"$REPO_ROOT/.githooks/lib/commit-msg.sh" "$@"
+
