@@ -42,6 +42,7 @@ import type { Executor } from '../../core/executor.js';
 export class CodexAdapter implements Adapter {
   readonly id = 'codex' as const;
   readonly readOnly = true as const;
+  readonly resumeStrategy = 'native' as const;
   private readonly defaultTimeoutMs: number;
   private readonly defaultModel: string;
 

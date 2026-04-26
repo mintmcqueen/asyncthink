@@ -27,6 +27,7 @@ import type { Executor } from '../../core/executor.js';
 export class GeminiAdapter implements Adapter {
   readonly id = 'gemini' as const;
   readonly readOnly = true as const;
+  readonly resumeStrategy = 'replay' as const;
   private readonly defaultTimeoutMs: number;
   private readonly defaultModel: string;
 

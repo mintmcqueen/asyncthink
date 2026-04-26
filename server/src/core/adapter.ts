@@ -42,11 +42,23 @@ export interface AdapterResult {
   durationMs: number;
 }
 
+/**
+ * How an adapter handles multi-turn continuation:
+ *  - 'native': the underlying CLI exposes a session-resume primitive that
+ *    we drive via inv.sessionId. The orchestrator passes only the new turn's
+ *    prompt; the CLI remembers prior context server-side.
+ *  - 'replay': no usable native session API. The orchestrator must serialize
+ *    prior turns into the prompt itself (replay strategy) before each call.
+ */
+export type ResumeStrategy = 'native' | 'replay';
+
 export interface Adapter {
   /** Stable id used in skill manifests, tool args, and audit logs. */
   readonly id: string;
   /** v1 invariant — type-level guarantee that this adapter never writes. */
   readonly readOnly: true;
+  /** How this adapter handles cross-invocation continuation. */
+  readonly resumeStrategy: ResumeStrategy;
   /**
    * Invoke the subordinate. The adapter is responsible for:
    *  - Building the argv per its CLI's read-only conventions

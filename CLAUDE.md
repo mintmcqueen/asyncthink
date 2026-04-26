@@ -2,7 +2,7 @@
 
 > ## ⚠️ v2 refactor in progress on this branch
 >
-> **Status:** Phase 1 complete (adapter framework). The server lives at `server/`; v1 source is preserved at `server/src.v1/` for reference and will be deleted in Phase 3. MCP tools still return a `v2 in progress` notice (real handlers wired in Phase 2+) — pin **v1.1.9** for stable behavior.
+> **Status:** Phase 2 complete (delegate tool + threading). The server lives at `server/`; v1 source is preserved at `server/src.v1/` for reference and will be deleted in Phase 3. The `asyncthink` tool still returns a `v2 in progress` notice (real handler in Phase 3). The `delegate`, `delegate_close`, `delegate_close_all`, `delegate_list_threads`, and `asyncthink_config` (read-only) tools are functional.
 >
 > **Plan:** `/Users/jb/.claude/plans/quiet-cooking-feigenbaum.md` (5 phases, single v2.0.0 release at end).
 >
@@ -43,6 +43,37 @@ The v2 server invokes subordinate model CLIs through a uniform adapter abstracti
 - `claude` PONG live test passes (10.7s).
 
 These are environmental, not adapter-code. The unit tests prove the adapters are correctly built.
+
+## v2 Threading + Delegate (Phase 2)
+
+The `delegate` tool dispatches a single turn to a single subordinate, persisting the conversation as an append-only JSONL transcript. Threads survive server restarts and continue cleanly via either native session-resume (codex) or replay (claude, gemini).
+
+**Resume strategy is per-adapter** (`Adapter.resumeStrategy`):
+- `'native'` (codex) — orchestrator passes the prior assistant turn's `sessionId`; the CLI continues the conversation server-side via `codex exec resume <sid>`.
+- `'replay'` (claude, gemini) — orchestrator serializes prior turns into the prompt itself before each call. The adapter sees a `<conversation>...</conversation>`-fenced transcript followed by the new turn.
+
+**Storage:**
+- `server/src/stores/jsonlThreadStore.ts` — `JsonlThreadStore` impl. Files at `~/.local/share/asyncthink/threads/<threadId>.jsonl` while open; `~/.local/share/asyncthink/threads/closed/<threadId>.jsonl` after close.
+- Each line is one JSON object: a `{kind:"meta"}` header on open or a `{kind:"turn", ...}` body line. Atomic per-line via `fs.appendFileSync` (`O_APPEND`).
+- Read tolerates corrupted/truncated lines: it parses what it can and skips the rest.
+
+**Tools:**
+- `delegate({adapter, prompt, threadId?, files?, close?, ...})` — opens or continues a thread, dispatches one turn. Returns `{threadId, output, sessionId, turn, closed, reminder, ...}`.
+- `delegate_close({threadId})` — close one thread. Idempotent.
+- `delegate_close_all()` — end-of-session safety net.
+- `delegate_list_threads()` — list open threads with adapter and idle time.
+
+**Defense-in-depth against thread leakage** (no `Stop` hook in v1; deferred to v2.x):
+1. Inline `close: true` on `delegate` for one-round-trip closure.
+2. Explicit `delegate_close`/`delegate_close_all` tools with reminder fields baked into every response.
+3. Idle sweeper — `server/src/delegate/sweeper.ts` runs on every tool call (rate-limited to once per 30s) and closes threads idle > 6h. On next session start the sweeper hits any leftover stale threads.
+
+**Test coverage:**
+- `server/__tests__/unit/jsonlThreadStore.test.ts` — 11 tests (round-trip, idempotent open, list/close/closeAll/sweepIdle, corruption recovery, unsafe-id rejection, serialized burst).
+- `server/__tests__/unit/delegate.test.ts` — 9 tests (thread opening, persistence, continuation, replay vs native routing, close on inline flag, unknown-adapter error, parameter forwarding).
+- `server/__tests__/integration/delegate.contract.test.ts` — replays `__tests__/contracts/delegate.spec.json` end-to-end through the Delegate handler with a fake replay adapter.
+- `server/__tests__/integration/restartSurvival.test.ts` — 3 tests simulating server restart (tear down + reconstruct Delegate over the same on-disk dir).
+- `server/__tests__/live/delegate.live.test.ts` — gated on `RUN_LIVE=1`. Multi-turn for claude (replay), codex (native), gemini (replay).
 
 
 

@@ -28,9 +28,23 @@ The v2 refactor is underway on `developer/jb_a`. v1 source is preserved at `serv
 - Live test scaffolding at `server/__tests__/live/adapters.live.test.ts`, gated on `RUN_LIVE=1`. PONG tests for all three adapters plus a 2-turn codex resume test.
 - 33 unit tests passing in CI mode.
 
+### Phase 2 — delegate tool + threading
+
+- Implemented `JsonlThreadStore` (`server/src/stores/jsonlThreadStore.ts`): append-only JSONL transcripts at `~/.local/share/asyncthink/threads/`, with separate `closed/` subdir. Atomic per-line writes via `O_APPEND`. Tolerant of corrupted/truncated lines on read. 11 unit tests including round-trip, concurrent burst, idempotent open/close, sweepIdle by mtime, unsafe-id rejection.
+- Added `Adapter.resumeStrategy` (`'native' | 'replay'`) so the delegate handler routes continuation correctly per adapter. Codex is `native` (uses `exec resume <thread_id>`); claude and gemini are `replay` (orchestrator serializes prior turns into the prompt).
+- Implemented `Delegate` (`server/src/delegate/delegate.ts`): opens or continues a thread, persists user + assistant turns, optionally closes inline. 9 unit tests cover thread lifecycle, replay vs native routing, parameter forwarding, error handling.
+- Implemented `sweepIdleOnce` (`server/src/delegate/sweeper.ts`): rate-limited (30s) idle-thread sweeper, runs on every tool invocation. Default threshold 6h.
+- Wired four tools through `server/src/tools/delegate.tool.ts` against real handlers (formerly Phase 0 stubs): `delegate`, `delegate_close`, `delegate_close_all`, `delegate_list_threads`. Tool descriptions and response `reminder` fields keep close-discipline visible to callers.
+- Built singleton wiring at `server/src/app.ts` (AdapterRegistry, LocalSubprocessExecutor, JsonlThreadStore, Delegate).
+- Implemented contract spec runner (`server/__tests__/runContract.ts`): walks JSON specs, resolves `@from:steps[N].field` refs, supports `@nonempty`/`@string`/`@contains:` predicates. Same spec runs offline (CI) or live (RUN_LIVE=1) by swapping the adapter lookup.
+- Authored `server/__tests__/contracts/delegate.spec.json` — 3-step open / follow-up / close flow exercising replay strategy.
+- Restart-survival integration tests at `server/__tests__/integration/restartSurvival.test.ts`: 3 tests covering replay history, native sessionId recovery, closed-stay-closed.
+- Live multi-turn tests at `server/__tests__/live/delegate.live.test.ts` — gated on `RUN_LIVE=1`. Includes 3-turn codex native-resume test (highest-risk behavior) and 2-turn claude/gemini replay tests.
+- 57 unit + integration tests passing in CI mode.
+
 ### Planned
 
-- Phase 2: `JsonlThreadStore`, `delegate` and close tools, idle sweeper.
+- Phase 3: `FsTaskStore`, council refactor, deletion of `server/src.v1/` and `@google/genai`.
 - Phase 3: `FsTaskStore`, council refactor, deletion of `server/src.v1/` and `@google/genai`.
 - Phase 4: `SkillRegistry`, three reference skills, slash command wrappers.
 - Phase 5: `JsonlAuditLog`, config tool refactor, migration, smoke tests, `v2.0.0` tag.

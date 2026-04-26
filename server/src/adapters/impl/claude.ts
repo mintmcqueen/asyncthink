@@ -24,6 +24,7 @@ import type { Executor } from '../../core/executor.js';
 export class ClaudeAdapter implements Adapter {
   readonly id = 'claude' as const;
   readonly readOnly = true as const;
+  readonly resumeStrategy = 'replay' as const;
   private readonly defaultTimeoutMs: number;
   private readonly defaultModel: string;
 
