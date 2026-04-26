@@ -19,7 +19,11 @@ export interface AdapterManifest {
   binary: string;
   /** Default model id used when an invocation does not specify one. */
   defaultModel: string;
-  /** Env-var names that must be set for the adapter to be usable. */
+  /**
+   * Env-var names; at least one must be set (OR semantics) for the adapter to
+   * be usable. Empty array means no env requirement (e.g. Claude using
+   * subscription auth via the local CLI).
+   */
   requiredEnv: string[];
   /** Default subprocess timeout in milliseconds. */
   defaultTimeoutMs: number;

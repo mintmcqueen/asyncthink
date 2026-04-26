@@ -16,9 +16,20 @@ The v2 refactor is underway on `developer/jb_a`. v1 source is preserved at `serv
 - Configured vitest to scope coverage to `server/src/**` and exclude v1 paths.
 - Installed `git-guard` hooks (per-repo, `.githooks/`) with develop as the integration branch and `mintmcqueen/asyncthink` as the GitHub repo.
 
+### Phase 1 — adapter framework
+
+- Implemented `LocalSubprocessExecutor` (`server/src/exec/localSubprocess.ts`) with timeout, tree-kill on expiry (SIGTERM grace then SIGKILL), separate stdout/stderr capture, and stdin support. 8 unit tests covering exit codes, stdin, cwd, env, timeout-kill, and missing-binary rejection.
+- Implemented `FsManifestRegistry` (`server/src/adapters/registry.ts`) with strict validation (required fields, string-array `requiredEnv`, positive `defaultTimeoutMs`, no duplicate ids). 7 unit tests.
+- Authored three adapter manifests at `server/src/adapters/manifests/{claude,gemini,codex}.json`.
+- Implemented three adapter impls at `server/src/adapters/impl/{claude,gemini,codex}.ts`. Read-only enforcement per adapter: claude `--print`, gemini `--approval-mode plan`, codex `--sandbox read-only`. Codex uses native session resume (extracts `thread_id` from `thread.started` JSON events); claude/gemini use replay strategy.
+- Codex adapter targets v0.47 (dropped `--ask-for-approval`; sandbox mode governs approval; `thread.started` event provides session id). Updated CLAUDE.md with the rationale.
+- `AdapterRegistry.withDefaults()` (`server/src/adapters/index.ts`) registers the three built-ins.
+- `RecordingExecutor` test helper (`server/__tests__/_helpers/recordingExecutor.ts`) is the test double at the OS-process boundary — captures argv/env/stdin without spawning a process. 16 adapter unit tests assert each CLI's argv shape.
+- Live test scaffolding at `server/__tests__/live/adapters.live.test.ts`, gated on `RUN_LIVE=1`. PONG tests for all three adapters plus a 2-turn codex resume test.
+- 33 unit tests passing in CI mode.
+
 ### Planned
 
-- Phase 1: implement `LocalSubprocessExecutor`, three adapters (`claude`, `gemini`, `codex`), golden-argv tests, and live PONG / session-resume tests.
 - Phase 2: `JsonlThreadStore`, `delegate` and close tools, idle sweeper.
 - Phase 3: `FsTaskStore`, council refactor, deletion of `server/src.v1/` and `@google/genai`.
 - Phase 4: `SkillRegistry`, three reference skills, slash command wrappers.

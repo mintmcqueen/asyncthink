@@ -1,0 +1,180 @@
+import { describe, it, expect } from 'vitest';
+import { ClaudeAdapter } from '../../src/adapters/impl/claude.js';
+import { GeminiAdapter } from '../../src/adapters/impl/gemini.js';
+import { CodexAdapter } from '../../src/adapters/impl/codex.js';
+import { AdapterRegistry } from '../../src/adapters/index.js';
+import { RecordingExecutor } from '../_helpers/recordingExecutor.js';
+
+describe('ClaudeAdapter', () => {
+  it('emits --print with the prompt as the final arg', async () => {
+    const a = new ClaudeAdapter();
+    const exec = new RecordingExecutor();
+    await a.invoke({ prompt: 'PING', cwd: '/work' }, exec);
+    expect(exec.calls[0].bin).toBe('claude');
+    expect(exec.calls[0].argv[0]).toBe('--print');
+    expect(exec.calls[0].argv).toContain('PING');
+  });
+
+  it('passes --model when supplied', async () => {
+    const a = new ClaudeAdapter({ defaultModel: 'claude-default' });
+    const exec = new RecordingExecutor();
+    await a.invoke({ prompt: 'p', model: 'claude-override' }, exec);
+    const argv = exec.calls[0].argv;
+    expect(argv).toContain('--model');
+    expect(argv[argv.indexOf('--model') + 1]).toBe('claude-override');
+  });
+
+  it('prepends a Files header when files are supplied', async () => {
+    const a = new ClaudeAdapter();
+    const exec = new RecordingExecutor();
+    await a.invoke({ prompt: 'analyze', files: ['/a.ts', '/b.ts'] }, exec);
+    const promptArg = exec.calls[0].argv[exec.calls[0].argv.length - 1];
+    expect(promptArg).toContain('Files available for review');
+    expect(promptArg).toContain('/a.ts');
+    expect(promptArg).toContain('/b.ts');
+    expect(promptArg).toContain('analyze');
+  });
+
+  it('echoes inv.sessionId back unchanged (replay strategy)', async () => {
+    const a = new ClaudeAdapter();
+    const exec = new RecordingExecutor();
+    const out = await a.invoke({ prompt: 'p', sessionId: 'thread-7' }, exec);
+    expect(out.sessionId).toBe('thread-7');
+  });
+});
+
+describe('GeminiAdapter', () => {
+  it('emits -p, --output-format json, --approval-mode plan, -m', async () => {
+    const a = new GeminiAdapter({ defaultModel: 'gemini-default' });
+    const exec = new RecordingExecutor();
+    await a.invoke({ prompt: 'PING' }, exec);
+    const argv = exec.calls[0].argv;
+    expect(exec.calls[0].bin).toBe('gemini');
+    expect(argv).toContain('-p');
+    expect(argv[argv.indexOf('-p') + 1]).toBe('PING');
+    expect(argv).toContain('--output-format');
+    expect(argv[argv.indexOf('--output-format') + 1]).toBe('json');
+    expect(argv).toContain('--approval-mode');
+    expect(argv[argv.indexOf('--approval-mode') + 1]).toBe('plan');
+    expect(argv).toContain('-m');
+    expect(argv[argv.indexOf('-m') + 1]).toBe('gemini-default');
+  });
+
+  it('passes unique parent directories via --include-directories', async () => {
+    const a = new GeminiAdapter();
+    const exec = new RecordingExecutor();
+    await a.invoke(
+      {
+        prompt: 'p',
+        files: ['/proj/src/a.ts', '/proj/src/b.ts', '/proj/docs/x.md'],
+      },
+      exec
+    );
+    const argv = exec.calls[0].argv;
+    expect(argv).toContain('--include-directories');
+    const dirs = argv[argv.indexOf('--include-directories') + 1];
+    expect(dirs.split(',').sort()).toEqual(['/proj/docs', '/proj/src']);
+  });
+
+  it('omits --include-directories when no files', async () => {
+    const a = new GeminiAdapter();
+    const exec = new RecordingExecutor();
+    await a.invoke({ prompt: 'p' }, exec);
+    expect(exec.calls[0].argv).not.toContain('--include-directories');
+  });
+
+  it('parses gemini json {response: "..."} into text', async () => {
+    const a = new GeminiAdapter();
+    const exec = new RecordingExecutor([
+      { stdout: JSON.stringify({ response: 'PONG' }), stderr: '', exitCode: 0, durationMs: 1 },
+    ]);
+    const out = await a.invoke({ prompt: 'PING' }, exec);
+    expect(out.text).toBe('PONG');
+  });
+});
+
+describe('CodexAdapter', () => {
+  it('emits exec subcommand and read-only sandbox flags on first turn', async () => {
+    const a = new CodexAdapter({ defaultModel: 'gpt-default' });
+    const exec = new RecordingExecutor();
+    await a.invoke({ prompt: 'PING', cwd: '/proj' }, exec);
+    const argv = exec.calls[0].argv;
+    expect(exec.calls[0].bin).toBe('codex');
+    expect(argv[0]).toBe('exec');
+    expect(argv).not.toContain('resume');
+    expect(argv).toContain('--sandbox');
+    expect(argv[argv.indexOf('--sandbox') + 1]).toBe('read-only');
+    // v0.47 dropped --ask-for-approval; sandbox mode governs approval.
+    expect(argv).not.toContain('--ask-for-approval');
+    expect(argv).toContain('--json');
+    expect(argv).toContain('--skip-git-repo-check');
+    expect(argv).toContain('--color');
+    expect(argv[argv.indexOf('--color') + 1]).toBe('never');
+    expect(argv).toContain('--cd');
+    expect(argv[argv.indexOf('--cd') + 1]).toBe('/proj');
+    expect(argv).toContain('--model');
+    expect(argv[argv.indexOf('--model') + 1]).toBe('gpt-default');
+    expect(argv[argv.length - 1]).toBe('PING');
+  });
+
+  it('inserts "resume <sessionId>" after exec when sessionId is provided', async () => {
+    const a = new CodexAdapter();
+    const exec = new RecordingExecutor();
+    await a.invoke({ prompt: 'follow up', sessionId: 'codex-sess-42' }, exec);
+    const argv = exec.calls[0].argv;
+    expect(argv[0]).toBe('exec');
+    expect(argv[1]).toBe('resume');
+    expect(argv[2]).toBe('codex-sess-42');
+  });
+
+  it('inlines files as XML-fenced context blocks at top of prompt', async () => {
+    const a = new CodexAdapter();
+    const exec = new RecordingExecutor();
+    await a.invoke({ prompt: 'analyze', files: ['/proj/a.ts', '/proj/b.ts'] }, exec);
+    const promptArg = exec.calls[0].argv[exec.calls[0].argv.length - 1];
+    expect(promptArg).toContain('<context>');
+    expect(promptArg).toContain('<file path="/proj/a.ts">');
+    expect(promptArg).toContain('<file path="/proj/b.ts">');
+    expect(promptArg).toContain('</context>');
+    expect(promptArg).toContain('analyze');
+  });
+
+  it('extracts thread id from thread.started event and exposes it as result.sessionId', async () => {
+    const a = new CodexAdapter();
+    const stream = [
+      JSON.stringify({ type: 'thread.started', thread_id: 'codex-real-id' }),
+      JSON.stringify({ type: 'message', role: 'assistant', content: 'PONG' }),
+    ].join('\n');
+    const exec = new RecordingExecutor([
+      { stdout: stream, stderr: '', exitCode: 0, durationMs: 1 },
+    ]);
+    const out = await a.invoke({ prompt: 'PING' }, exec);
+    expect(out.sessionId).toBe('codex-real-id');
+  });
+
+  it('falls back to inv.sessionId when stream has no session id', async () => {
+    const a = new CodexAdapter();
+    const exec = new RecordingExecutor([
+      { stdout: '', stderr: '', exitCode: 0, durationMs: 1 },
+    ]);
+    const out = await a.invoke({ prompt: 'p', sessionId: 'fallback' }, exec);
+    expect(out.sessionId).toBe('fallback');
+  });
+});
+
+describe('AdapterRegistry', () => {
+  it('withDefaults() registers claude, gemini, codex', () => {
+    const r = AdapterRegistry.withDefaults();
+    expect(r.list().map((a) => a.id).sort()).toEqual(['claude', 'codex', 'gemini']);
+  });
+
+  it('all built-in adapters declare readOnly: true', () => {
+    const r = AdapterRegistry.withDefaults();
+    for (const a of r.list()) expect(a.readOnly).toBe(true);
+  });
+
+  it('returns undefined for unknown id', () => {
+    const r = AdapterRegistry.withDefaults();
+    expect(r.get('llama-cli')).toBeUndefined();
+  });
+});

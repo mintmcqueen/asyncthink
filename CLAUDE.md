@@ -2,11 +2,49 @@
 
 > ## ⚠️ v2 refactor in progress on this branch
 >
-> **Status:** Phase 0 scaffold complete. The server now lives at `server/`; the v1 source has been preserved at `server/src.v1/` for reference and will be deleted in Phase 3. All MCP tools currently return a `v2 in progress` notice — for stable behavior, pin to the **v1.1.9** git tag.
+> **Status:** Phase 1 complete (adapter framework). The server lives at `server/`; v1 source is preserved at `server/src.v1/` for reference and will be deleted in Phase 3. MCP tools still return a `v2 in progress` notice (real handlers wired in Phase 2+) — pin **v1.1.9** for stable behavior.
 >
 > **Plan:** `/Users/jb/.claude/plans/quiet-cooking-feigenbaum.md` (5 phases, single v2.0.0 release at end).
 >
 > The body of this document still describes v1 architecture. It is rewritten phase-by-phase via `/doc-guard`; full v2 rewrite lands at the end of Phase 3.
+
+## v2 Adapters (Phase 1)
+
+The v2 server invokes subordinate model CLIs through a uniform adapter abstraction. Three adapters ship: `claude`, `gemini`, `codex`. All are read-only at the type level (`Adapter.readOnly: true`).
+
+**Architecture:**
+- `server/src/core/adapter.ts` — `Adapter` interface (id, readOnly, invoke).
+- `server/src/core/executor.ts` — `Executor` interface (subprocess abstraction; v3 swap point for cloud companion).
+- `server/src/core/manifests.ts` — `AdapterManifest` interface (metadata only: binary, defaultModel, requiredEnv, defaultTimeoutMs).
+- `server/src/exec/localSubprocess.ts` — v1 `Executor` impl with detached process groups, tree-kill on timeout (1s SIGTERM grace, then SIGKILL), separate stdout/stderr capture, durationMs reporting.
+- `server/src/adapters/manifests/{claude,gemini,codex}.json` — bundled manifests.
+- `server/src/adapters/registry.ts` — `FsManifestRegistry` (loads + validates JSON manifests).
+- `server/src/adapters/impl/{claude,gemini,codex}.ts` — TS impls per CLI. New adapter = new TS file + new manifest.
+- `server/src/adapters/index.ts` — `AdapterRegistry.withDefaults()` instantiates the three built-ins.
+
+**Why TS impls (not pure JSON):** flag-shape variance across CLIs (Gemini's `--include-directories`, Codex's inline-files-in-prompt with no include-dirs flag, native vs replay session resume) cannot be cleanly templated as JSON. Manifests carry metadata; impls carry execution.
+
+**Read-only enforcement per adapter:**
+- `claude` — invoked via `claude --print <prompt>`. Print mode runs without edit/exec tools.
+- `gemini` — invoked with `--approval-mode plan` (planning agent, read-only navigation).
+- `codex` — invoked with `--sandbox read-only`. Note: codex v0.47 dropped the `--ask-for-approval` flag; sandbox mode now governs both access and approval.
+
+**Session continuation:**
+- `claude` and `gemini` use **replay strategy**: orchestrator prepends prior turns to the prompt; adapters echo `inv.sessionId` back unchanged (or mint a uuid) for stable thread ids.
+- `codex` uses **native** strategy: `codex exec resume <thread_id>` for follow-up turns. The adapter extracts `thread_id` from the `{"type":"thread.started"}` event in the `--json` event stream.
+
+**Test policy (two-tier):**
+- `server/__tests__/unit/adapters.test.ts` — 16 unit tests using a `RecordingExecutor` test double at the OS-process boundary. Asserts each adapter's argv/env/stdin shape. Runs in CI without binaries or API keys.
+- `server/__tests__/live/adapters.live.test.ts` — gated on `RUN_LIVE=1`. Hits real `gemini`, `codex`, `claude` binaries with PONG prompts plus a 2-turn codex resume test. Skipped in CI; runs nightly + locally.
+
+**Known live-test limitations on this dev environment:**
+- Installed `gemini-cli` is v0.1.3, which predates the modern flag set the adapter targets (`--output-format`, `--approval-mode`, `--include-directories`, `--resume`). Live gemini test will fail until gemini-cli is upgraded; unit tests verify the modern argv shape regardless. Document the minimum gemini-cli version required when README is rewritten in Phase 5.
+- `codex` is installed but auth is currently broken (`Failed to refresh token: 401 Unauthorized`). Run `codex login` or set `OPENAI_API_KEY` to enable live codex tests.
+- `claude` PONG live test passes (10.7s).
+
+These are environmental, not adapter-code. The unit tests prove the adapters are correctly built.
+
+
 
 **Version 1.0.0** - Sequential Thinking + Hybrid Async Research Workers
 
