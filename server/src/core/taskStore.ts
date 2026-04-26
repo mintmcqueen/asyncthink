@@ -25,6 +25,10 @@ export interface TaskState {
   error?: string;
   /** Thought number that spawned this fork (asyncthink only). */
   forkThought?: number;
+  /** Adapter id this fork dispatched to. */
+  adapter?: string;
+  /** Wall-clock duration of the underlying adapter invocation. */
+  durationMs?: number;
 }
 
 export interface TaskStore {

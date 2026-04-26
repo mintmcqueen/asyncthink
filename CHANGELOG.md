@@ -42,9 +42,25 @@ The v2 refactor is underway on `developer/jb_a`. v1 source is preserved at `serv
 - Live multi-turn tests at `server/__tests__/live/delegate.live.test.ts` — gated on `RUN_LIVE=1`. Includes 3-turn codex native-resume test (highest-risk behavior) and 2-turn claude/gemini replay tests.
 - 57 unit + integration tests passing in CI mode.
 
+### Phase 3 — asyncthink council + TaskStore + v1 deletion
+
+- Implemented `FsTaskStore` (`server/src/stores/fsTaskStore.ts`): in-memory primary with disk mirror at `~/.local/share/asyncthink/tasks/<sanitizedId>/state.json`. Replaces v1 `ledger.json`'s role for in-flight worker state. 8 unit tests covering create/update/delete, status filtering, disk persistence + reload, sanitization, idempotent delete.
+- Extended `TaskState` with `adapter` and `durationMs` so council results carry attribution.
+- Implemented `Council` (`server/src/asyncthink/council.ts`): chain-scoped fork registration (`<chainThreadId>::<forkId>`), fire-and-forget dispatch through `Adapter.invoke()`, parallel waitFor, status introspection, and an `endChain` that drains in-flight forks (timeout-bounded), closes all child threads, and prunes tasks. 9 unit tests including parallel-execution timing and chain isolation.
+- Ported `AsyncThinkingServer` (`server/src/asyncthink/thinking.ts`) verbatim from v1, with 8 vitest tests asserting unchanged behavior.
+- Simplified `prompts.ts` from v1's 142-LOC organizer (workerType branches dropped) to a small `wrapWithCouncilContext` helper.
+- Wired `asyncthink.tool.ts` to the real Council + AsyncThinkingServer: chains auto-open on first thought, auto-end on `nextThoughtNeeded:false`, expose `forks` (parallel array), `waitFor`, `readResearch`, and `chainEnded` in responses.
+- Added singleton wiring for `Council`, `AsyncThinkingServer`, and `FsTaskStore` in `server/src/app.ts`.
+- Authored end-to-end chain integration test (`server/__tests__/integration/asyncthinkChain.test.ts`): scripted 4-thought session with 2 forks at t2, collection at t3, auto-end at t4.
+- Authored `server/__tests__/contracts/asyncthink.spec.json` documenting the chain contract; live 3-fork council test at `server/__tests__/live/council.live.test.ts` (RUN_LIVE=1).
+- **Audited `server/src.v1/lib/gemini-client.ts`** for retry/timeout logic worth porting; nothing non-trivial. Deleted `server/src.v1/` and `server/__tests__.v1/` directories.
+- **Removed `@google/genai` dependency** from `server/package.json`. `npm ls @google/genai` empty; no source references remain in `server/src/`.
+- **Rewrote CLAUDE.md** as a fully v2 document. v1 sections deleted; v1 history retained in this CHANGELOG only.
+- 85 unit + integration tests passing in CI mode.
+
 ### Planned
 
-- Phase 3: `FsTaskStore`, council refactor, deletion of `server/src.v1/` and `@google/genai`.
+- Phase 4: `SkillRegistry`, three reference skills, slash command wrappers.
 - Phase 3: `FsTaskStore`, council refactor, deletion of `server/src.v1/` and `@google/genai`.
 - Phase 4: `SkillRegistry`, three reference skills, slash command wrappers.
 - Phase 5: `JsonlAuditLog`, config tool refactor, migration, smoke tests, `v2.0.0` tag.

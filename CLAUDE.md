@@ -1,482 +1,210 @@
-# AsyncThink MCP Server - Developer Documentation
+# AsyncThink MCP Server — Developer Documentation
 
-> ## ⚠️ v2 refactor in progress on this branch
->
-> **Status:** Phase 2 complete (delegate tool + threading). The server lives at `server/`; v1 source is preserved at `server/src.v1/` for reference and will be deleted in Phase 3. The `asyncthink` tool still returns a `v2 in progress` notice (real handler in Phase 3). The `delegate`, `delegate_close`, `delegate_close_all`, `delegate_list_threads`, and `asyncthink_config` (read-only) tools are functional.
->
-> **Plan:** `/Users/jb/.claude/plans/quiet-cooking-feigenbaum.md` (5 phases, single v2.0.0 release at end).
->
-> The body of this document still describes v1 architecture. It is rewritten phase-by-phase via `/doc-guard`; full v2 rewrite lands at the end of Phase 3.
+> **Status:** v2 refactor underway on `developer/jb_a`. Phases 0–3 complete (scaffold, adapters, delegate + threading, council). Phases 4–5 still ahead. Stable v1 behavior is at the **v1.1.9** git tag.
 
-## v2 Adapters (Phase 1)
+## Purpose
 
-The v2 server invokes subordinate model CLIs through a uniform adapter abstraction. Three adapters ship: `claude`, `gemini`, `codex`. All are read-only at the type level (`Adapter.readOnly: true`).
+AsyncThink is an MCP server for sequential thinking with optional parallel forks to subordinate model CLIs. The central orchestrator (Claude Code, in practice) reasons step-by-step and can convene a "council" of independent perspectives — each fork is a fire-and-forget invocation of a different subordinate adapter (claude, gemini, codex). It also exposes a `delegate` tool for single-subordinate threaded conversations. All subordinates are **read-only**: they may navigate files but never edit, exec, or write.
 
-**Architecture:**
-- `server/src/core/adapter.ts` — `Adapter` interface (id, readOnly, invoke).
-- `server/src/core/executor.ts` — `Executor` interface (subprocess abstraction; v3 swap point for cloud companion).
-- `server/src/core/manifests.ts` — `AdapterManifest` interface (metadata only: binary, defaultModel, requiredEnv, defaultTimeoutMs).
-- `server/src/exec/localSubprocess.ts` — v1 `Executor` impl with detached process groups, tree-kill on timeout (1s SIGTERM grace, then SIGKILL), separate stdout/stderr capture, durationMs reporting.
-- `server/src/adapters/manifests/{claude,gemini,codex}.json` — bundled manifests.
-- `server/src/adapters/registry.ts` — `FsManifestRegistry` (loads + validates JSON manifests).
-- `server/src/adapters/impl/{claude,gemini,codex}.ts` — TS impls per CLI. New adapter = new TS file + new manifest.
-- `server/src/adapters/index.ts` — `AdapterRegistry.withDefaults()` instantiates the three built-ins.
+## Tools (six)
 
-**Why TS impls (not pure JSON):** flag-shape variance across CLIs (Gemini's `--include-directories`, Codex's inline-files-in-prompt with no include-dirs flag, native vs replay session resume) cannot be cleanly templated as JSON. Manifests carry metadata; impls carry execution.
+| Tool | Purpose |
+| --- | --- |
+| `asyncthink` | Sequential thinking + parallel forks (council). Auto-closes chain on `nextThoughtNeeded:false`. |
+| `delegate` | Open or continue a single-subordinate thread. Inline `close: true` for one-round-trip. |
+| `delegate_close` | Close a thread. Idempotent. |
+| `delegate_close_all` | End-of-session safety net. |
+| `delegate_list_threads` | Introspection: open threads, adapter, idle time. |
+| `asyncthink_config` | View config; list adapters/skills (full action set lands in Phase 5). |
 
-**Read-only enforcement per adapter:**
-- `claude` — invoked via `claude --print <prompt>`. Print mode runs without edit/exec tools.
+## Architecture
+
+```
+┌──────────────────────────────────────────────────────────┐
+│ MCP Tool Layer                                           │  stable v1→v3
+│   asyncthink, delegate, delegate_close, *_list, _config  │
+├──────────────────────────────────────────────────────────┤
+│ Orchestration                                            │  stable
+│   AsyncThinkingServer  Council  Delegate                 │
+├──────────────────────────────────────────────────────────┤
+│ Adapters                                                 │  stable interface,
+│   impl/{claude,gemini,codex}.ts (TS impls)               │  TS impl per CLI
+│   manifests/{claude,gemini,codex}.json (metadata only)   │
+├──────────────────────────────────────────────────────────┤
+│ Storage                                                  │  swap point for v3
+│   ThreadStore (JsonlThreadStore)                         │
+│   TaskStore   (FsTaskStore)                              │
+│   AuditLog    (Phase 5)                                  │
+│   SkillRegistry (Phase 4)                                │
+├──────────────────────────────────────────────────────────┤
+│ Executor (LocalSubprocessExecutor)                       │  swap point for v3
+└──────────────────────────────────────────────────────────┘
+```
+
+Storage and Executor are the swap points for the eventual hosted/SOC2/Vertex v3 — the tool surface and orchestration code stay identical when the cloud port lands.
+
+## Adapters
+
+Three subordinates ship in v2: `claude`, `gemini`, `codex`. Each is a TypeScript impl that knows its CLI's argv shape and session-resume convention; manifests in `server/src/adapters/manifests/*.json` carry only metadata (binary, default model, env requirements, default timeout). New adapter = new TS file under `server/src/adapters/impl/` plus a JSON manifest.
+
+**Why not pure JSON manifests:** flag-shape variance across CLIs (gemini's `--include-directories`, codex's inline-files-in-prompt, native vs replay session resume) cannot be cleanly templated as JSON. Metadata templates well; execution doesn't.
+
+**Read-only enforcement** is per-adapter:
+- `claude` — invoked with `claude --print <prompt>`. Print mode runs without edit/exec tools.
 - `gemini` — invoked with `--approval-mode plan` (planning agent, read-only navigation).
-- `codex` — invoked with `--sandbox read-only`. Note: codex v0.47 dropped the `--ask-for-approval` flag; sandbox mode now governs both access and approval.
+- `codex` — invoked with `--sandbox read-only`. v0.47 dropped `--ask-for-approval`; sandbox mode now governs both access and approval flow.
 
-**Session continuation:**
-- `claude` and `gemini` use **replay strategy**: orchestrator prepends prior turns to the prompt; adapters echo `inv.sessionId` back unchanged (or mint a uuid) for stable thread ids.
-- `codex` uses **native** strategy: `codex exec resume <thread_id>` for follow-up turns. The adapter extracts `thread_id` from the `{"type":"thread.started"}` event in the `--json` event stream.
+**Session continuation** is declared per-adapter via `Adapter.resumeStrategy`:
+- `'native'` (codex) — orchestrator passes the prior turn's `sessionId`; the CLI resumes via `codex exec resume <thread_id>`. The adapter extracts `thread_id` from the `{"type":"thread.started"}` event in the `--json` stream.
+- `'replay'` (claude, gemini) — orchestrator serializes prior turns into the prompt itself before each call. Adapters echo `inv.sessionId` back (or mint a uuid) for stable thread ids.
 
-**Test policy (two-tier):**
-- `server/__tests__/unit/adapters.test.ts` — 16 unit tests using a `RecordingExecutor` test double at the OS-process boundary. Asserts each adapter's argv/env/stdin shape. Runs in CI without binaries or API keys.
-- `server/__tests__/live/adapters.live.test.ts` — gated on `RUN_LIVE=1`. Hits real `gemini`, `codex`, `claude` binaries with PONG prompts plus a 2-turn codex resume test. Skipped in CI; runs nightly + locally.
+Codex env: `OPENAI_API_KEY` (or `codex login`). Gemini env: `GEMINI_API_KEY` or `GOOGLE_API_KEY`. Claude: uses the user's authenticated CLI session.
 
-**Known live-test limitations on this dev environment:**
-- Installed `gemini-cli` is v0.1.3, which predates the modern flag set the adapter targets (`--output-format`, `--approval-mode`, `--include-directories`, `--resume`). Live gemini test will fail until gemini-cli is upgraded; unit tests verify the modern argv shape regardless. Document the minimum gemini-cli version required when README is rewritten in Phase 5.
-- `codex` is installed but auth is currently broken (`Failed to refresh token: 401 Unauthorized`). Run `codex login` or set `OPENAI_API_KEY` to enable live codex tests.
-- `claude` PONG live test passes (10.7s).
+## Threading + Delegate
 
-These are environmental, not adapter-code. The unit tests prove the adapters are correctly built.
+Threads are durable, append-only JSONL transcripts. The `delegate` tool dispatches one turn per call, persisting both user and assistant turns. Threads survive server restart (validated by `__tests__/integration/restartSurvival.test.ts`).
 
-## v2 Threading + Delegate (Phase 2)
-
-The `delegate` tool dispatches a single turn to a single subordinate, persisting the conversation as an append-only JSONL transcript. Threads survive server restarts and continue cleanly via either native session-resume (codex) or replay (claude, gemini).
-
-**Resume strategy is per-adapter** (`Adapter.resumeStrategy`):
-- `'native'` (codex) — orchestrator passes the prior assistant turn's `sessionId`; the CLI continues the conversation server-side via `codex exec resume <sid>`.
-- `'replay'` (claude, gemini) — orchestrator serializes prior turns into the prompt itself before each call. The adapter sees a `<conversation>...</conversation>`-fenced transcript followed by the new turn.
-
-**Storage:**
-- `server/src/stores/jsonlThreadStore.ts` — `JsonlThreadStore` impl. Files at `~/.local/share/asyncthink/threads/<threadId>.jsonl` while open; `~/.local/share/asyncthink/threads/closed/<threadId>.jsonl` after close.
-- Each line is one JSON object: a `{kind:"meta"}` header on open or a `{kind:"turn", ...}` body line. Atomic per-line via `fs.appendFileSync` (`O_APPEND`).
+**Storage layout:**
+- `~/.local/share/asyncthink/threads/<threadId>.jsonl` — open
+- `~/.local/share/asyncthink/threads/closed/<threadId>.jsonl` — closed
+- Each line is one JSON object: a `{kind:"meta"}` header on open or a `{kind:"turn", ...}` body line. Atomic via `fs.appendFileSync` (`O_APPEND`).
 - Read tolerates corrupted/truncated lines: it parses what it can and skips the rest.
-
-**Tools:**
-- `delegate({adapter, prompt, threadId?, files?, close?, ...})` — opens or continues a thread, dispatches one turn. Returns `{threadId, output, sessionId, turn, closed, reminder, ...}`.
-- `delegate_close({threadId})` — close one thread. Idempotent.
-- `delegate_close_all()` — end-of-session safety net.
-- `delegate_list_threads()` — list open threads with adapter and idle time.
 
 **Defense-in-depth against thread leakage** (no `Stop` hook in v1; deferred to v2.x):
 1. Inline `close: true` on `delegate` for one-round-trip closure.
-2. Explicit `delegate_close`/`delegate_close_all` tools with reminder fields baked into every response.
-3. Idle sweeper — `server/src/delegate/sweeper.ts` runs on every tool call (rate-limited to once per 30s) and closes threads idle > 6h. On next session start the sweeper hits any leftover stale threads.
+2. Explicit `delegate_close` / `delegate_close_all` tools with reminder fields baked into every response.
+3. Idle sweeper at 6h (`server/src/delegate/sweeper.ts`) — runs on every tool call, rate-limited to once per 30s. On next session start, the sweeper hits any leftover stale threads.
 
-**Test coverage:**
-- `server/__tests__/unit/jsonlThreadStore.test.ts` — 11 tests (round-trip, idempotent open, list/close/closeAll/sweepIdle, corruption recovery, unsafe-id rejection, serialized burst).
-- `server/__tests__/unit/delegate.test.ts` — 9 tests (thread opening, persistence, continuation, replay vs native routing, close on inline flag, unknown-adapter error, parameter forwarding).
-- `server/__tests__/integration/delegate.contract.test.ts` — replays `__tests__/contracts/delegate.spec.json` end-to-end through the Delegate handler with a fake replay adapter.
-- `server/__tests__/integration/restartSurvival.test.ts` — 3 tests simulating server restart (tear down + reconstruct Delegate over the same on-disk dir).
-- `server/__tests__/live/delegate.live.test.ts` — gated on `RUN_LIVE=1`. Multi-turn for claude (replay), codex (native), gemini (replay).
+## Council (asyncthink forks)
 
+Each `asyncthink` chain has a `chainThreadId`. Forks within a thought are children threads named `<chainThreadId>::<forkId>`. Tasks in `FsTaskStore` use the same scoping so concurrent chains do not collide.
 
+Forks are fire-and-forget: `Council.fork()` registers the in-flight promise and returns immediately. The caller collects results later via `waitFor` or `readResearch`, or lets the final thought (`nextThoughtNeeded:false`) auto-collect everything via `Council.endChain()`. End-of-chain:
+1. Awaits any remaining in-flight forks, up to a per-call timeout (default 180s).
+2. Closes all child threads.
+3. Prunes the chain's tasks from `FsTaskStore`.
+4. Returns aggregated results to the tool handler for inclusion in the response.
 
-**Version 1.0.0** - Sequential Thinking + Hybrid Async Research Workers
+## Repo layout
 
-## System Overview & Current Status
-
-**Core Purpose**: MCP server combining Sequential Thinking with async research workers. Claude Code spawns parallel workers for research while continuing its thinking process, then injects results when ready.
-
-**Architecture**: TypeScript MCP server with hybrid worker model:
-- **Claude Code workers** (45-90s): Full capability subprocesses via `claude --print`
-- **Gemini workers** (2-5s): Direct API calls for fast feedback/web research
-
-**Current Status**: Production-ready with full hybrid worker support
-
-## Critical Data Flow
-
-### Primary Flow: Sequential Thinking + Async Research
 ```
-Claude Code Session
-    │
-    ├──► asyncthink Tool Call (thought + forkResearch)
-    │       │
-    │       ├──► processThought() → update history, format output
-    │       │
-    │       └──► forkResearch handler
-    │               │
-    │               ├── type: "claude" ──► spawnOrganizerWorker()
-    │               │                           │
-    │               │                           └──► spawn("claude", ["--print", prompt])
-    │               │                                    └──► writes stdout to taskDir
-    │               │
-    │               └── type: "gemini" ──► executeGeminiWorker()
-    │                                           │
-    │                                           └──► GeminiClient.generateContent()
-    │                                                    └──► direct API, writes result immediately
-    │
-    ├──► (Claude continues thinking while workers run)
-    │
-    ├──► asyncthink Tool Call (thought + waitFor/readResearch)
-    │       │
-    │       ├──► checkAndCollectResults() → poll for completed workers
-    │       │
-    │       └──► ledger.getResult() → inject into output
-    │
-    └──► Final Thought (nextThoughtNeeded: false)
-            │
-            ├──► Auto-wait for ALL pending research
-            ├──► Auto-inject ALL completed results
-            └──► Cleanup session tasks from ledger
-```
-
-### Session Isolation Flow
-```
-Server Start
-    │
-    └──► Generate SESSION_ID: "sess_{timestamp}_{random}"
-            │
-            ├──► All task IDs scoped: SESSION_ID::userProvidedId
-            │
-            └──► Cleanup filters by session prefix
+/                                    # plugin root
+├── .claude-plugin/plugin.json
+├── .mcp.json
+├── commands/
+├── skills/                          # Phase 4
+├── agents/
+├── hooks/
+├── README.md
+├── CHANGELOG.md
+├── CLAUDE.md
+└── server/
+    ├── package.json
+    ├── tsconfig.json
+    ├── vitest.config.ts
+    ├── src/
+    │   ├── index.ts                 # MCP wiring, tool registration
+    │   ├── app.ts                   # singletons (registry, executor, stores, delegate, council, thinking)
+    │   ├── core/                    # interfaces only (adapter, executor, *Store, *Registry, manifests, config)
+    │   ├── adapters/
+    │   │   ├── manifests/{claude,gemini,codex}.json
+    │   │   ├── impl/{claude,gemini,codex}.ts
+    │   │   ├── registry.ts          # FsManifestRegistry
+    │   │   └── index.ts             # AdapterRegistry.withDefaults()
+    │   ├── stores/
+    │   │   ├── jsonlThreadStore.ts
+    │   │   ├── fsTaskStore.ts
+    │   │   └── jsonlAuditLog.ts     # Phase 5
+    │   ├── exec/localSubprocess.ts
+    │   ├── asyncthink/
+    │   │   ├── thinking.ts
+    │   │   ├── council.ts
+    │   │   └── prompts.ts
+    │   ├── delegate/
+    │   │   ├── delegate.ts
+    │   │   └── sweeper.ts
+    │   └── tools/
+    │       ├── asyncthink.tool.ts
+    │       ├── delegate.tool.ts
+    │       ├── config.tool.ts
+    │       └── _stub.ts
+    └── __tests__/
+        ├── contracts/               # *.spec.json acceptance fixtures
+        ├── unit/                    # interface unit tests, fake Executor
+        ├── integration/             # in-process MCP, fake adapters
+        ├── live/                    # real CLIs, RUN_LIVE=1
+        ├── _helpers/recordingExecutor.ts
+        └── runContract.ts           # spec runner for delegate flows
 ```
 
-## Version History & Key Enhancements
+## Test policy (two-tier)
 
-**v1.1.9** - Publish Preparation
-- Added dotenv dependency for .env file support (`import 'dotenv/config'` in index.ts:6)
-- Created .gitignore to exclude node_modules, dist, coverage, .env files
-- Upgraded vitest to v4 to fix 6 moderate vulnerabilities (now 0)
-- Environment variables now loaded from .env file at startup
+CI runs `*.test.ts` end-to-end against MCP tool contracts with a fake `Executor` injected at the OS-process boundary. This is dependency injection, not mocking the system under test — the MCP server itself is unmocked. Live tests (`*.live.test.ts`) hit real `gemini`, `codex`, `claude` binaries; gated on `RUN_LIVE=1`, executed locally by developers and via a nightly cron.
 
-**v1.1.8** - Clarify Intent Requirements for Both Workers
-- Files example is now suggestion, not mandate
-- Claude workers: "Has file access but still needs clear intent/context in topic"
-- Both worker types need clear topic - Gemini for context, Claude for intent
+Acceptance specs live as JSON fixtures under `__tests__/contracts/`. The delegate spec is replayed by `runContract.ts` in both modes (same spec, two execution backends).
 
-**v1.1.7** - Balanced Worker Descriptions
-- Condensed Gemini description: "Metacognitive partner: feedback | critique | collaborate"
-- Expanded Claude description: codebase exploration, docs research, web search, multi-step investigation
+## Persistence (XDG)
 
-**v1.1.6** - Simplify to Topic + Files
-- Removed `context` parameter - topic should include all context in one complete statement
-- Files now work for ANY Gemini mode (feedback, critique, collaborate) - not just collaborate
-
-**v1.1.5** - Gemini Zero Context Emphasis (superseded by v1.1.6)
-- Emphasized Gemini has ZERO prior context
-
-**v1.1.4** - Emphasize Gemini Consultation Requirement
-- Added IMPORTANT guidance: seek Gemini feedback at milestones and before conclusions
-- Minimum one Gemini consultation per session; multiple rounds encouraged
-- Positioned Gemini as "Metacognitive partner" in tool description
-
-**v1.1.3** - Delist Web from Tool Schema
-- Removed `web` from advertised workerType options in index.ts
-- Gemini still has grounded search capability internally
-- Avoids constraining Claude's perception of Gemini's purpose
-
-**v1.1.2** - Fix Gemini Blocking Bug
-- Gemini workers now fire-and-forget (don't await)
-- Previously: `await executeGeminiWorker()` blocked until Gemini returned
-- Now: Fire worker, continue immediately, collect results via `readResearch`
-- Gemini workers are now truly async like Claude workers
-
-**v1.1.1** - Enable, Don't Prescribe
-- Simplified tool description to follow AsyncThink paper's philosophy
-- Removed prescriptive "use in thoughts 1-3" guidance
-- Model decides when to fork based on reasoning needs
-- Key insight: "The structure is yours to decide"
-- Tool description now enables rather than constrains
-
-**v1.1.0** - Deep Collaboration Mode
-- Added `workerType:"collaborate"` for context-rich Gemini collaboration
-- File upload support via `files: ["./path/to/file.ts"]` parameter
-- GeminiClient now supports `uploadFile()`, `uploadFiles()`, `collaborate()`
-- Gemini transforms from "tool" to "collaborator who understands your project"
-
-**v1.0.2** - Reclaim Intent: Gemini as Metacognitive Partner
-- Repositioned Gemini workers as "metacognitive thought partner" for thoughts 1-3
-- Emphasized pre-decomposition requirement (Gemini can't spawn sub-workers)
-- Claude workers for heavy research (codebase, docs, web)
-- Added clear WORKFLOW section showing when to fork, read, and revise
-- Tool description now teaches INTENT, not just parameters
-
-**v1.0.1** - Sequential Thinking Preservation & Gemini Fix
-- Fixed Gemini grounded search: `tools` must be inside `config` object per @google/genai SDK
-- Restructured tool description to preserve original sequential thinking instructional style
-- Inlined `ThoughtInput` type into `thinking.ts` (removed `src/types/` barrel)
-- Tool description preserves original structure + minimal async docs
-
-**v1.0.0** - Hybrid Workers
-- Gemini workers for fast feedback (`src/lib/gemini-client.ts`)
-- Worker type routing in handler (`src/index.ts:274-300`)
-- Configuration tool (`asyncthink_config`)
-- `.env.example` for API keys
-
-**v0.9.0** - Session Isolation
-- SESSION_ID scoping for concurrent session safety
-- Auto-cleanup on final thought
-- Failed task visibility in output
-
-**v0.8.0** - Core Implementation
-- Sequential thinking integration
-- Claude Code subprocess workers
-- XDG-compliant persistence
-- Ledger state management
-
-## Component Architecture & Dependencies
-
-### Entry Point
-- **`src/index.ts`** (663 lines) - MCP server setup, tool registration
-  - **Dependencies**: `thinking.ts`, `ledger.ts`, `orchestrator.ts`, `config.ts`, `gemini-client.ts`
-  - **Purpose**: Register `asyncthink` and `asyncthink_config` tools, handle all requests
-  - **Key Functions**:
-    - `scopeTaskId()` / `unscopeTaskId()` - Session ID management (lines 54-71)
-    - Tool handler (lines 245-499) - Main request processing
-    - Config tool handler (lines 546-644) - Configuration management
-
-### Business Logic Layer
-- **`src/lib/thinking.ts`** (110 lines) - Sequential thinking core
-  - **Dependencies**: `chalk`
-  - **Purpose**: Thought processing, history, branching; exports `ThoughtInput` type
-  - **Key Class**: `AsyncThinkingServer`
-    - `processThought()` - Main entry point (line 48)
-    - `formatThought()` - Console formatting (line 20)
-
-- **`src/lib/orchestrator.ts`** (414 lines) - Worker spawning and management
-  - **Dependencies**: `ledger.ts`, `config.ts`, `gemini-client.ts`, `prompts/organizer.ts`
-  - **Purpose**: Spawn/execute workers, collect results
-  - **Key Functions**:
-    - `spawnOrganizerWorker()` - Claude Code subprocess (line 40)
-    - `executeGeminiWorker()` - Fast Gemini API call (line 128)
-    - `checkAndCollectResults()` - Poll for completed workers (line 314)
-    - `checkTimeouts()` - Handle timed-out workers (line 378)
-
-- **`src/lib/gemini-client.ts`** (460 lines) - Gemini API client
-  - **Dependencies**: `@google/genai`, `config.ts`, `fs`, `path`
-  - **Purpose**: Gemini API calls with file upload and collaboration support
-  - **Key Class**: `GeminiClient`
-    - `generateContent()` - Quick API call (line 111)
-    - `uploadFile()` / `uploadFiles()` - File upload to Gemini (lines 256, 308)
-    - `collaborate()` - Deep collaboration with files (line 319)
-    - `isAvailable()` - Check for API key (line 438)
-
-### Data Layer
-- **`src/lib/ledger.ts`** (489 lines) - Task state persistence
-  - **Dependencies**: `config.ts`
-  - **Purpose**: Track task states, persist to XDG path
-  - **Key Class**: `Ledger`
-    - `createTask()` - Initialize task (line 201)
-    - `updateTask()` - Update state (line 231)
-    - `getResult()` - Parse completed result (line 419)
-    - `cleanupStaleTasks()` - Recover orphaned tasks (line 133)
-
-- **`src/lib/config.ts`** (333 lines) - Configuration management
-  - **Dependencies**: `fs`, `os`, `path`
-  - **Purpose**: XDG-compliant config, runtime settings
-  - **Key Class**: `ConfigManager`
-    - `get()` / `getValue()` - Read config
-    - `update()` - Persist changes
-    - `ensureDirectories()` - Create XDG paths
-
-### Prompt Templates
-- **`src/prompts/organizer.ts`** (142 lines) - Worker prompts
-  - **Purpose**: Format prompts for different worker types
-  - **Key Functions**:
-    - `formatOrganizerPrompt()` - Claude Code decomposition prompt (line 13)
-    - `formatGeminiPrompt()` - Gemini feedback/critique/web prompts (line 86)
-
-## File Structure
-```
-asyncthink/
-├── CLAUDE.md              # This file - developer context
-├── .env.example           # API key template
-├── package.json           # Dependencies, scripts
-├── tsconfig.json          # TypeScript config
-├── vitest.config.ts       # Test config
-├── src/
-│   ├── index.ts           # ★ MCP SERVER ENTRY POINT
-│   ├── lib/
-│   │   ├── thinking.ts    # Sequential thinking + ThoughtInput type (110 LOC)
-│   │   ├── orchestrator.ts # Worker spawning/management (414 LOC)
-│   │   ├── gemini-client.ts # Gemini API client (236 LOC)
-│   │   ├── ledger.ts      # Task state persistence (489 LOC)
-│   │   └── config.ts      # XDG configuration (333 LOC)
-│   └── prompts/
-│       └── organizer.ts   # Worker prompt templates (142 LOC)
-├── __tests__/
-│   └── lib.test.ts        # Unit tests
-└── dist/                  # Compiled output
-```
-
-## Component Interdependency Map
-
-### Dependency Hierarchy (Most Critical → Least)
-```
-Level 1: src/index.ts (entry point)
-    └──► All Level 2 components
-
-Level 2: Business Logic
-    ├── thinking.ts ──► (self-contained, exports ThoughtInput)
-    ├── orchestrator.ts ──► ledger.ts, config.ts, gemini-client.ts, prompts/
-    └── gemini-client.ts ──► config.ts
-
-Level 3: Data Layer
-    ├── ledger.ts ──► config.ts
-    └── config.ts ──► (no internal deps)
-
-Level 4: Utilities
-    └── prompts/organizer.ts ──► (no deps)
-```
-
-### Impact Radius Documentation
-
-| Component | Changes Affect | Update Requirements |
-|-----------|---------------|---------------------|
-| `index.ts` | Tool behavior, MCP protocol | Test with MCP inspector |
-| `orchestrator.ts` | Worker spawning, result collection | Update ledger expectations |
-| `gemini-client.ts` | Gemini worker behavior | Check API compatibility |
-| `ledger.ts` | All task state | Migration if schema changes |
-| `config.ts` | All components reading config | Update defaults carefully |
-| `thinking.ts` | ThoughtInput type, thought processing | Update tests if interface changes |
-| `prompts/organizer.ts` | Worker output format | Update result parsing |
-
-## Architectural Thinking Protocol
-
-**Before changing ANY component**:
-1. Map affected components (direct + indirect dependencies)
-2. Analyze downstream effects: "What breaks if this changes?"
-3. Update interdependency maps in this document
-4. Document impact radius: "Changes to X affect Y, Z"
-5. Verify all related documentation is synchronized
-
-**Red Flags**: Circular deps, undocumented workarounds, missing dependency updates
-
-## Critical Debugging Points
-
-### Key Log Identifiers
-All logs go to stderr (stdout reserved for MCP protocol):
-
-| Log Prefix | Component | What It Tracks |
-|------------|-----------|----------------|
-| `[AsyncThink]` | index.ts | Session ID, fork operations, cleanup |
-| `[Orchestrator]` | orchestrator.ts | Worker spawning, completion, timeouts |
-| `[GeminiClient]` | gemini-client.ts | API init, requests, response stats |
-| `[Ledger]` | ledger.ts | Task lifecycle, cleanup, errors |
-| `[Config]` | config.ts | Load/save operations |
-
-### Common Issues & Solutions
-
-**Issue**: Gemini workers fail with "API key not found"
-**Diagnosis**: Check `GeminiClient.isAvailable()` returns false
-**Fix**: Set `GOOGLE_API_KEY` or `GEMINI_API_KEY` environment variable
-
-**Issue**: Gemini grounded search returns empty results
-**Diagnosis**: `tools` array at wrong level in API request
-**Fix**: Per @google/genai SDK, `tools` must be inside `config` object: `config.tools = [{ googleSearch: {} }]`
-
-**Issue**: Claude Code workers timeout
-**Diagnosis**: Check `[Orchestrator] Worker X timed out` in logs
-**Fix**: Increase `workerTimeoutMs` via config tool or env var
-
-**Issue**: Tasks from old sessions pollute results
-**Diagnosis**: SESSION_ID scoping not filtering properly
-**Fix**: Check `isCurrentSession()` function, ensure ledger cleanup runs
-
-**Issue**: Research results not injected on final thought
-**Diagnosis**: `nextThoughtNeeded: false` not triggering auto-wait
-**Fix**: Verify lines 305-312 in index.ts (auto-wait logic)
-
-## Development Environment
-
-### Local Development Setup
-```bash
-# Install dependencies
-npm install
-
-# Build TypeScript
-npm run build
-
-# Run tests
-npm test
-
-# Watch mode during development
-npm run watch
-```
-
-### Dependencies
-- **Runtime**: Node.js 18+
-- **@modelcontextprotocol/sdk**: ^1.24.0 - MCP protocol
-- **@google/genai**: ^1.x - Gemini API client
-- **zod**: ^3.x - Schema validation
-- **chalk**: ^5.3.0 - Console formatting
-
-### Environment Variables
-```bash
-# Required for Gemini workers
-GOOGLE_API_KEY=your-key     # or GEMINI_API_KEY
-
-# Optional overrides
-ASYNCTHINK_DEFAULT_WORKERS=3     # 1-3
-ASYNCTHINK_TIMEOUT_MS=120000     # Claude worker timeout
-ASYNCTHINK_LOG_LEVEL=info        # debug|info|warn|error
-DISABLE_THOUGHT_LOGGING=false    # Suppress formatted thoughts
-```
-
-### Testing & Validation
-```bash
-# Run all tests
-npm test
-
-# Run with coverage
-npm test -- --coverage
-
-# Smoke test MCP server
-node dist/index.js  # Check stderr for startup messages
-```
-
-### XDG Data Paths
 ```
 ~/.local/share/asyncthink/
-├── config.json    # Persisted configuration
-├── ledger.json    # Task state
-└── tasks/         # Worker output directories
-    └── {SESSION_ID}::{taskId}/
-        ├── stdout  # Worker output
-        └── stderr  # Worker errors
+├── threads/                                    # active conversation transcripts
+│   ├── <threadId>.jsonl
+│   └── closed/<threadId>.jsonl                 # closed transcripts retained for inspection
+├── tasks/<sanitizedTaskId>/state.json          # in-flight worker state mirror (debug/audit)
+└── audit.jsonl                                 # Phase 5
 ```
 
-## Developer Quick Start & Context Rebuilding
+## Logging conventions
 
-### Essential Files for Understanding
-1. This file (CLAUDE.md) - Complete system context
-2. `src/index.ts` - Main tool registration and handler
-3. `src/lib/orchestrator.ts` - Worker lifecycle
+All logs go to **stderr** (stdout is reserved for MCP protocol).
 
-### Most Common Developer Tasks
+| Prefix | Source |
+| --- | --- |
+| `[AsyncThink]` | top-level server |
+| `[Council]` | parallel-fork orchestration |
+| `[Delegate]` | single-subordinate handoff |
+| `[ThreadStore]` | transcript persistence |
+| `[TaskStore]` | in-flight task state |
+| `[Adapter:<id>]` | per-adapter execution |
 
-**Add new Gemini worker type**:
-1. Add type to `formatGeminiPrompt()` in `prompts/organizer.ts`
-2. Update `workerType` enum in `index.ts` schema (line 215)
-3. Test with Gemini API
+## Environment variables
 
-**Modify task persistence**:
-1. Update `TaskState` interface in `ledger.ts`
-2. Consider migration for existing ledger.json files
-3. Update `getResult()` parsing if result format changes
+```bash
+# Required per adapter (only adapters you use):
+GEMINI_API_KEY=...      # or GOOGLE_API_KEY for gemini
+OPENAI_API_KEY=...      # or `codex login` for codex
+# claude inherits the user's authenticated Claude Code session
 
-**Change worker spawning behavior**:
-1. Modify `spawnOrganizerWorker()` or `executeGeminiWorker()` in `orchestrator.ts`
-2. Update timeout handling if needed
-3. Test with both worker types
+# Optional overrides:
+DISABLE_THOUGHT_LOGGING=true   # suppress formatted thought boxes on stderr
+XDG_DATA_HOME=/custom/path     # override XDG data root
+RUN_LIVE=1                     # opt into live test suites
+```
 
-### Implementation Status
-- **Complete**:
-  - Sequential thinking core
-  - Claude Code subprocess workers
-  - Gemini fast workers (feedback, critique, web)
-  - Session isolation
-  - Auto-wait/auto-inject on final thought
-  - Configuration tool
-  - XDG persistence
+## Development
 
-- **Future Considerations**:
-  - Worker result caching
-  - Parallel multi-worker optimization
-  - Custom Gemini model selection per-call
+```bash
+cd server
+npm install
+npm run build         # tsc + chmod +x dist/index.js
+npm test              # vitest, coverage scoped to src/
+npm run watch         # tsc --watch
+
+# Live tests (requires gemini, codex, claude installed + authenticated):
+RUN_LIVE=1 npm test
+```
+
+## Methodology (per `/Users/jb/.claude/plans/quiet-cooking-feigenbaum.md`)
+
+- `/git-guard` — installed in Phase 0; personal-branch gitflow hooks govern the entire refactor.
+- `/rigorous-refactor` — task-list discipline starting Phase 1.
+- `/doc-guard` — at the end of every phase: CLAUDE.md and CHANGELOG.md must be in sync with the phase's changes.
+- `/branch-rotation` — at the end of every phase, after `/doc-guard`. (Bundled until end of refactor for this round, per user direction.)
+
+## Live-test status on this dev environment
+
+- **claude** PONG live test passes.
+- **gemini** — installed `gemini-cli` is v0.1.3, predates the modern flag set the adapter targets (`--output-format`, `--approval-mode`, `--include-directories`, `--resume`). Live test fails until the CLI is upgraded; unit tests verify the modern argv shape regardless. README in Phase 5 documents the minimum gemini-cli version.
+- **codex** — installed `codex` v0.47.0; auth currently shows 401 Unauthorized. Run `codex login` or set `OPENAI_API_KEY` to enable live tests.
+
+These are environmental, not code. Unit tests prove adapter argv correctness.

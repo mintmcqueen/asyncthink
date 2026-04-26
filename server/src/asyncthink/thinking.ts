@@ -1,14 +1,15 @@
 /**
- * AsyncThink Thinking Module
+ * AsyncThink sequential thinking core.
  *
- * Core sequential thinking logic, extended from sequentialthinking.
- * Handles thought processing, history, and branching.
+ * Ported verbatim from server/src.v1/lib/thinking.ts. The thinking engine
+ * itself is unchanged in v2 — what changes is how forks dispatch to
+ * subordinate adapters (see ./council.ts).
  */
 
 import chalk from 'chalk';
 
 /**
- * Input for a single thought step
+ * Input for a single thought step.
  */
 export interface ThoughtInput {
   thought: string;
@@ -28,11 +29,20 @@ export class AsyncThinkingServer {
   private disableThoughtLogging: boolean;
 
   constructor() {
-    this.disableThoughtLogging = (process.env.DISABLE_THOUGHT_LOGGING || "").toLowerCase() === "true";
+    this.disableThoughtLogging =
+      (process.env.DISABLE_THOUGHT_LOGGING || '').toLowerCase() === 'true';
   }
 
   private formatThought(thoughtData: ThoughtInput): string {
-    const { thoughtNumber, totalThoughts, thought, isRevision, revisesThought, branchFromThought, branchId } = thoughtData;
+    const {
+      thoughtNumber,
+      totalThoughts,
+      thought,
+      isRevision,
+      revisesThought,
+      branchFromThought,
+      branchId,
+    } = thoughtData;
 
     let prefix = '';
     let context = '';
@@ -59,10 +69,13 @@ export class AsyncThinkingServer {
 └${border}┘`;
   }
 
-  public processThought(input: ThoughtInput): { content: Array<{ type: "text"; text: string }>; isError?: boolean } {
+  public processThought(input: ThoughtInput): {
+    content: Array<{ type: 'text'; text: string }>;
+    isError?: boolean;
+  } {
     try {
-      // Validation happens at the tool registration layer via Zod
-      // Adjust totalThoughts if thoughtNumber exceeds it
+      // Validation happens at the tool registration layer via Zod.
+      // Adjust totalThoughts if thoughtNumber exceeds it.
       if (input.thoughtNumber > input.totalThoughts) {
         input.totalThoughts = input.thoughtNumber;
       }
@@ -82,27 +95,39 @@ export class AsyncThinkingServer {
       }
 
       return {
-        content: [{
-          type: "text" as const,
-          text: JSON.stringify({
-            thoughtNumber: input.thoughtNumber,
-            totalThoughts: input.totalThoughts,
-            nextThoughtNeeded: input.nextThoughtNeeded,
-            branches: Object.keys(this.branches),
-            thoughtHistoryLength: this.thoughtHistory.length
-          }, null, 2)
-        }]
+        content: [
+          {
+            type: 'text' as const,
+            text: JSON.stringify(
+              {
+                thoughtNumber: input.thoughtNumber,
+                totalThoughts: input.totalThoughts,
+                nextThoughtNeeded: input.nextThoughtNeeded,
+                branches: Object.keys(this.branches),
+                thoughtHistoryLength: this.thoughtHistory.length,
+              },
+              null,
+              2
+            ),
+          },
+        ],
       };
     } catch (error) {
       return {
-        content: [{
-          type: "text" as const,
-          text: JSON.stringify({
-            error: error instanceof Error ? error.message : String(error),
-            status: 'failed'
-          }, null, 2)
-        }],
-        isError: true
+        content: [
+          {
+            type: 'text' as const,
+            text: JSON.stringify(
+              {
+                error: error instanceof Error ? error.message : String(error),
+                status: 'failed',
+              },
+              null,
+              2
+            ),
+          },
+        ],
+        isError: true,
       };
     }
   }

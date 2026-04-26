@@ -5,7 +5,7 @@ describe('phase 0 sanity', () => {
     expect(1 + 1).toBe(2);
   });
 
-  it('contract specs parse as JSON', async () => {
+  it('contract specs parse as JSON with name + tool fields', async () => {
     const fs = await import('fs');
     const path = await import('path');
     const dir = path.resolve(__dirname, 'contracts');
@@ -15,7 +15,6 @@ describe('phase 0 sanity', () => {
       const data = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'));
       expect(data).toHaveProperty('name');
       expect(data).toHaveProperty('tool');
-      expect(Array.isArray(data.steps)).toBe(true);
     }
   });
 });

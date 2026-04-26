@@ -1,7 +1,41 @@
 {
-  "name": "asyncthink-placeholder",
+  "name": "asyncthink-4-thought-2-fork-chain",
   "tool": "asyncthink",
-  "phase": 0,
-  "note": "Real spec lands in Phase 3 (council). This file is a structural placeholder only.",
-  "steps": []
+  "description": "4-thought session: think at t1, spawn 2 forks at t2, collect at t3, end at t4. The companion vitest suite at server/__tests__/integration/asyncthinkChain.test.ts exercises this scenario end-to-end with a fake adapter; this JSON file documents the contract.",
+  "phase": 3,
+  "scenario": [
+    {
+      "thoughtNumber": 1,
+      "thought": "Begin reasoning about the problem.",
+      "expect": { "chainEnded": false, "research.pending": [] }
+    },
+    {
+      "thoughtNumber": 2,
+      "thought": "Need second opinions; spawning council.",
+      "forks": [
+        { "id": "claude-take", "adapter": "claude", "prompt": "What is your view?" },
+        { "id": "gemini-take", "adapter": "gemini", "prompt": "What is your view?" }
+      ],
+      "expect": { "chainEnded": false, "research.pending": ["claude-take", "gemini-take"] }
+    },
+    {
+      "thoughtNumber": 3,
+      "thought": "Collecting council responses.",
+      "waitFor": ["claude-take", "gemini-take"],
+      "expect": {
+        "chainEnded": false,
+        "research.complete": ["claude-take", "gemini-take"],
+        "researchResults[].adapter": ["claude", "gemini"]
+      }
+    },
+    {
+      "thoughtNumber": 4,
+      "thought": "Synthesis. Done.",
+      "nextThoughtNeeded": false,
+      "expect": {
+        "chainEnded": true,
+        "researchResults[].id": ["claude-take", "gemini-take"]
+      }
+    }
+  ]
 }
