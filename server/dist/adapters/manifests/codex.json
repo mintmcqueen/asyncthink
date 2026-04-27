@@ -8,6 +8,11 @@
     "low": "gpt-5-mini"
   },
   "defaultTier": "med",
+  "tierLimits": {
+    "high": { "maxContext": 400000, "rateLimitClass": "standard", "expectedLatencyMsP50": 15000 },
+    "med": { "maxContext": 400000, "rateLimitClass": "standard", "expectedLatencyMsP50": 9000 },
+    "low": { "maxContext": 128000, "rateLimitClass": "standard", "expectedLatencyMsP50": 4000 }
+  },
   "requiredEnv": ["OPENAI_API_KEY"],
   "defaultTimeoutMs": 180000,
   "description": "OpenAI Codex CLI via 'codex exec --sandbox read-only' for code-aware research with native session resume."

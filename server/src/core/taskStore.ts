@@ -7,9 +7,29 @@
  *
  * v1: filesystem-backed at ~/.local/share/asyncthink/tasks/.
  * v3: Firestore.
+ *
+ * v2.2: schema extended with `detached`, `principal`, `idempotencyKey`,
+ * `taskTtlMs`, `lastUpdatedAt`, plus the protocol-spec status set so the
+ * record can carry MCP Tasks state directly. Legacy v2.0 statuses
+ * ('pending'|'running'|'complete'|'failed') remain valid for backward
+ * compatibility with on-disk state from v2.1.x.
  */
 
-export type TaskStatus = 'pending' | 'running' | 'complete' | 'failed';
+/**
+ * Status set: superset of legacy v2.0 council-fork statuses + MCP Tasks
+ * spec statuses. Council still writes the legacy strings; TaskExecutor
+ * writes the spec strings.
+ */
+export type TaskStatus =
+  | 'pending'
+  | 'running'
+  | 'complete'
+  | 'failed'
+  // MCP Tasks spec extensions (v2.2)
+  | 'working'
+  | 'input_required'
+  | 'completed'
+  | 'cancelled';
 
 export interface TaskState {
   /** Session-scoped id: SESSION_ID::userProvidedId. */
@@ -29,6 +49,30 @@ export interface TaskState {
   adapter?: string;
   /** Wall-clock duration of the underlying adapter invocation. */
   durationMs?: number;
+  /**
+   * v2.2 — detached forks bypass chain-end cleanup (R-DUR-D.1). Council
+   * tasks default to false; delegate-async tasks default to true.
+   */
+  detached?: boolean;
+  /**
+   * v2.2 — owner principal. v2 single-tenant local: null. v3 OAuth subject.
+   * (R-DUR-D.2)
+   */
+  principal?: string | null;
+  /** v2.2 — caller-supplied idempotency key for dedup. (R-DUR-D.3) */
+  idempotencyKey?: string;
+  /** v2.2 — effective TTL for this task in ms (after clamping). (R-DUR-D.4) */
+  taskTtlMs?: number;
+  /** v2.2 — ISO timestamp of the last status change. (R-DUR-D.4) */
+  lastUpdatedAt?: string;
+  /** v2.2 — parent chain id for council forks. */
+  parentChainId?: string;
+  /** v2.2 — continuation token from the underlying adapter (for thread chains). */
+  sessionId?: string;
+  /** v2.2 — substituted-from model id when R6b-D.2 successor substitution kicks in. */
+  substitutedFrom?: string;
+  /** v2.2 — exit code from the adapter result. */
+  exitCode?: number;
 }
 
 export interface TaskStore {
@@ -44,4 +88,20 @@ export interface TaskStore {
   delete(id: string): Promise<void>;
   /** Mark orphaned tasks (PIDs that no longer exist) as 'failed'. Returns ids cleaned. */
   cleanupStale(): Promise<string[]>;
+  /** v2.2 — find non-terminal tasks by `(idempotencyKey, principal)`. (R-DUR-D.3) */
+  findByIdempotencyKey?(key: string, principal: string | null): Promise<TaskState | undefined>;
+  /** v2.2 — list every task (for executor list + sweep). */
+  list?(): Promise<TaskState[]>;
+}
+
+/** Statuses that represent a task still in flight. */
+export const NON_TERMINAL_STATUSES: ReadonlySet<TaskStatus> = new Set<TaskStatus>([
+  'pending',
+  'running',
+  'working',
+  'input_required',
+]);
+
+export function isTerminal(status: TaskStatus): boolean {
+  return !NON_TERMINAL_STATUSES.has(status);
 }

@@ -42,9 +42,9 @@ export class ClaudeAdapter {
         this.defaultTier = opts.defaultTier ?? 'med';
     }
     async invoke(inv, exec) {
-        const model = resolveModel(inv, this.tiers, this.defaultTier);
+        const resolved = resolveModel(inv, this.tiers, this.defaultTier, { adapterId: this.id });
         const prompt = renderPrompt(inv);
-        const argv = ['--print', '--model', model, prompt];
+        const argv = ['--print', '--model', resolved.model, prompt];
         const result = await exec.run({
             bin: 'claude',
             argv,

@@ -10,23 +10,62 @@
  * so there is no PID-based stale recovery — if the server dies mid-fork,
  * the in-flight invocation dies with it. The disk mirror is observability
  * only.
+ *
+ * v2.2 additions:
+ *   - `findByIdempotencyKey(key, principal)`: scans non-terminal tasks for
+ *     dedup match (R-DUR-D.3).
+ *   - `cleanupStale()` reaps tasks whose `lastUpdatedAt` exceeds the
+ *     category TTL (R-DUR-D.4): WORKING 60m, COMPLETED 60m, FAILED 10m,
+ *     CANCELLED 5m. Returns reaped ids.
+ *   - `list()` enumerates every task.
+ *   - Atomic disk-mirror updates via write-temp + rename.
  */
 
-import { promises as fsp, mkdirSync, writeFileSync, readdirSync, existsSync, readFileSync } from 'fs';
+import {
+  promises as fsp,
+  mkdirSync,
+  writeFileSync,
+  readdirSync,
+  existsSync,
+  readFileSync,
+} from 'fs';
 import { join } from 'path';
-import type { TaskState, TaskStatus, TaskStore } from '../core/taskStore.js';
+import {
+  isTerminal,
+  type TaskState,
+  type TaskStatus,
+  type TaskStore,
+} from '../core/taskStore.js';
 
 export interface FsTaskStoreOptions {
   /** Directory; defaults to ~/.local/share/asyncthink/tasks/. */
   rootDir?: string;
+  /** Override clock for tests. */
+  now?: () => Date;
 }
+
+/** Category-wise sweep TTLs (R-DUR-D.4). All ms. */
+export const SWEEP_TTL_MS: Record<string, number> = {
+  // Non-terminal
+  pending: 60 * 60_000,
+  running: 60 * 60_000,
+  working: 60 * 60_000,
+  input_required: 60 * 60_000,
+  // Terminal
+  completed: 60 * 60_000,
+  complete: 60 * 60_000,
+  failed: 10 * 60_000,
+  cancelled: 5 * 60_000,
+};
 
 export class FsTaskStore implements TaskStore {
   private readonly rootDir: string;
   private readonly mem = new Map<string, TaskState>();
+  private readonly now: () => Date;
 
   constructor(opts: FsTaskStoreOptions = {}) {
     this.rootDir = opts.rootDir ?? defaultRootDir();
+    this.now = opts.now ?? (() => new Date());
     mkdirSync(this.rootDir, { recursive: true });
   }
 
@@ -36,12 +75,14 @@ export class FsTaskStore implements TaskStore {
     }
     const taskDir = join(this.rootDir, sanitizeId(id));
     mkdirSync(taskDir, { recursive: true });
+    const startTime = this.now().toISOString();
     const state: TaskState = {
       id,
       topic,
       status: 'pending',
       taskDir,
-      startTime: new Date().toISOString(),
+      startTime,
+      lastUpdatedAt: startTime,
     };
     this.mem.set(id, state);
     this.persist(state);
@@ -54,11 +95,12 @@ export class FsTaskStore implements TaskStore {
     const next: TaskState = { ...cur, ...patch, id: cur.id };
     if (
       patch.status &&
-      (patch.status === 'complete' || patch.status === 'failed') &&
+      isTerminal(patch.status) &&
       !next.completeTime
     ) {
-      next.completeTime = new Date().toISOString();
+      next.completeTime = this.now().toISOString();
     }
+    next.lastUpdatedAt = this.now().toISOString();
     this.mem.set(id, next);
     this.persist(next);
   }
@@ -71,25 +113,51 @@ export class FsTaskStore implements TaskStore {
     return [...this.mem.values()].filter((t) => t.status === status);
   }
 
+  async list(): Promise<TaskState[]> {
+    return [...this.mem.values()];
+  }
+
   async delete(id: string): Promise<void> {
     this.mem.delete(id);
-    const path = this.path(id);
+    const dir = join(this.rootDir, sanitizeId(id));
     try {
-      await fsp.unlink(path);
+      await fsp.rm(dir, { recursive: true, force: true });
     } catch {
       /* ignore */
     }
   }
 
+  async findByIdempotencyKey(
+    key: string,
+    principal: string | null
+  ): Promise<TaskState | undefined> {
+    for (const t of this.mem.values()) {
+      if (t.idempotencyKey !== key) continue;
+      if ((t.principal ?? null) !== principal) continue;
+      if (isTerminal(t.status)) continue;
+      return t;
+    }
+    return undefined;
+  }
+
   /**
-   * In v2 there are no detached PIDs to reap. cleanupStale exists to honor
-   * the interface; it returns ids of any tasks stuck in 'pending' or
-   * 'running' from a prior process invocation (caller can re-load and call
-   * this on startup if desired). Here we just no-op since the in-memory map
-   * is empty on a fresh constructor.
+   * Reap tasks whose `lastUpdatedAt` (or `startTime` fallback) exceeds the
+   * per-category TTL. Removes from memory and disk. Returns reaped ids.
    */
   async cleanupStale(): Promise<string[]> {
-    return [];
+    const now = this.now().getTime();
+    const reaped: string[] = [];
+    for (const t of [...this.mem.values()]) {
+      const ttl = SWEEP_TTL_MS[t.status] ?? SWEEP_TTL_MS.completed;
+      const ts = t.lastUpdatedAt ?? t.startTime;
+      if (!ts) continue;
+      const age = now - new Date(ts).getTime();
+      if (age >= ttl) {
+        await this.delete(t.id);
+        reaped.push(t.id);
+      }
+    }
+    return reaped;
   }
 
   /**

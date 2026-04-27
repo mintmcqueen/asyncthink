@@ -87,8 +87,104 @@ describe('FsTaskStore', () => {
     expect(await s.get('sess::weird/id')).toBeTruthy();
   });
 
-  it('cleanupStale returns empty (no PIDs to reap in v2)', async () => {
+  it('cleanupStale returns empty when nothing exceeds category TTL', async () => {
     const s = new FsTaskStore({ rootDir: tmp });
+    await s.create('fresh', 'topic');
     expect(await s.cleanupStale()).toEqual([]);
+  });
+
+  // v2.2 — idempotency-key index (R-DUR-D.3)
+  describe('findByIdempotencyKey', () => {
+    it('returns matching non-terminal task by (key, principal)', async () => {
+      const s = new FsTaskStore({ rootDir: tmp });
+      await s.create('a', 'topic');
+      await s.update('a', {
+        status: 'working',
+        idempotencyKey: 'IDK',
+        principal: null,
+      });
+      const found = await s.findByIdempotencyKey('IDK', null);
+      expect(found?.id).toBe('a');
+    });
+
+    it('returns undefined for terminal tasks', async () => {
+      const s = new FsTaskStore({ rootDir: tmp });
+      await s.create('done', 'topic');
+      await s.update('done', { status: 'completed', idempotencyKey: 'IDK' });
+      expect(await s.findByIdempotencyKey('IDK', null)).toBeUndefined();
+    });
+
+    it('partitions by principal', async () => {
+      const s = new FsTaskStore({ rootDir: tmp });
+      await s.create('a', 'topic');
+      await s.update('a', {
+        status: 'working',
+        idempotencyKey: 'X',
+        principal: 'alice',
+      });
+      const bob = await s.findByIdempotencyKey('X', 'bob');
+      expect(bob).toBeUndefined();
+      const alice = await s.findByIdempotencyKey('X', 'alice');
+      expect(alice?.id).toBe('a');
+    });
+  });
+
+  // v2.2 — category-wise TTL sweep (R-DUR-D.4)
+  describe('cleanupStale (category TTL)', () => {
+    it('working tasks reaped after 60m', async () => {
+      const s = new FsTaskStore({
+        rootDir: tmp,
+        now: () => new Date('2026-01-01T00:00:00Z'),
+      });
+      await s.create('w', 'work');
+      await s.update('w', { status: 'working' });
+      Object.defineProperty(s, 'now', {
+        value: () => new Date('2026-01-01T01:01:00Z'),
+      });
+      const reaped = await s.cleanupStale();
+      expect(reaped).toContain('w');
+    });
+
+    it('completed tasks reaped after 60m', async () => {
+      const s = new FsTaskStore({
+        rootDir: tmp,
+        now: () => new Date('2026-01-01T00:00:00Z'),
+      });
+      await s.create('c', 'work');
+      await s.update('c', { status: 'completed' });
+      Object.defineProperty(s, 'now', {
+        value: () => new Date('2026-01-01T01:01:00Z'),
+      });
+      const reaped = await s.cleanupStale();
+      expect(reaped).toContain('c');
+    });
+
+    it('failed tasks reaped after 10m', async () => {
+      const s = new FsTaskStore({
+        rootDir: tmp,
+        now: () => new Date('2026-01-01T00:00:00Z'),
+      });
+      await s.create('f', 'work');
+      await s.update('f', { status: 'failed' });
+      Object.defineProperty(s, 'now', {
+        value: () => new Date('2026-01-01T00:11:00Z'),
+      });
+      const reaped = await s.cleanupStale();
+      expect(reaped).toContain('f');
+    });
+
+    it('cancelled tasks reaped after 5m', async () => {
+      const s = new FsTaskStore({
+        rootDir: tmp,
+        now: () => new Date('2026-01-01T00:00:00Z'),
+      });
+      await s.create('x', 'work');
+      await s.update('x', { status: 'cancelled' });
+      Object.defineProperty(s, 'now', {
+        value: () => new Date('2026-01-01T00:06:00Z'),
+      });
+      const reaped = await s.cleanupStale();
+      expect(reaped).toContain('x');
+    });
   });
 });

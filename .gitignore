@@ -28,3 +28,6 @@ npm-debug.log*
 
 # TypeScript cache
 *.tsbuildinfo
+
+# Research scratch (R2-D ruling: dev/research is personal scratch, not committed)
+dev/research/

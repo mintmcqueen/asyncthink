@@ -65,7 +65,11 @@ export declare class Council {
     waitFor(forkIds: string[], parentThreadId: string, timeoutMs: number): Promise<void>;
     getResult(forkId: string, parentThreadId: string): Promise<CouncilResult | undefined>;
     chainStatus(parentThreadId: string): Promise<ChainStatus>;
-    /** Wait for all pending forks in the chain, close child threads, prune tasks. */
+    /**
+     * Wait for non-detached forks in the chain, close their child threads,
+     * prune their tasks. Detached forks (R-DUR-D.1) are immune: they survive
+     * past chain end and are reaped by the TTL sweeper.
+     */
     endChain(parentThreadId: string, timeoutMs: number): Promise<CouncilResult[]>;
     private scopeId;
 }

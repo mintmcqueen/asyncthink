@@ -8,6 +8,11 @@
     "low": "claude-haiku-4-5-20251001"
   },
   "defaultTier": "med",
+  "tierLimits": {
+    "high": { "maxContext": 200000, "rateLimitClass": "standard", "expectedLatencyMsP50": 12000 },
+    "med": { "maxContext": 200000, "rateLimitClass": "standard", "expectedLatencyMsP50": 12000 },
+    "low": { "maxContext": 200000, "rateLimitClass": "standard", "expectedLatencyMsP50": 4000 }
+  },
   "requiredEnv": [],
   "defaultTimeoutMs": 300000,
   "description": "Claude Code subprocess via 'claude --print' for full-capability research (codebase navigation, web, multi-step investigation). Read-only by virtue of how the adapter invokes it; the subprocess runs without the user's edit permissions in v1."

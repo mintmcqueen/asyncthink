@@ -1,20 +1,28 @@
 /**
- * asyncthink_config tool — adapter and skill introspection.
+ * asyncthink_config tool — adapter, skill, and task introspection.
  *
- * v1 surface:
- *   list_adapters  → registered adapters with binary availability + env-readiness
- *   list_skills    → all loaded skills (plugin + user)
- *   reload_skills  → force re-scan of skill directories
+ * v2.2 surface:
+ *   list_adapters    → registered adapters with binary availability +
+ *                      env-readiness + tierLimits
+ *   list_skills      → all loaded skills with pinsModel + pinIsCurrent
+ *   reload_skills    → force re-scan of skill directories
+ *   list_tasks       → alias for tasks_list (R4-D.2)
+ *   cancel_task      → alias for tasks_cancel (R4-D.2)
  *
- * The general config get/set/reset surface is reserved for a future
- * persistence layer; v1 returns "not yet implemented" for those.
+ * The general config get/set/reset surface remains reserved for a future
+ * persistence layer; v2.2 returns "not yet implemented" for those.
  */
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { existsSync } from 'fs';
 import { delimiter, join } from 'path';
-import { getManifestRegistry, getSkillRegistry } from '../app.js';
+import {
+  getManifestRegistry,
+  getSkillRegistry,
+  getTaskExecutor,
+} from '../app.js';
+import { TaskNotFoundError } from '../core/taskExecutor.js';
 
 interface AdapterListing {
   id: string;
@@ -28,6 +36,7 @@ interface AdapterListing {
   envOk: boolean;
   envMissing: string[];
   description?: string;
+  tierLimits?: unknown;
 }
 
 export function registerConfigTool(server: McpServer): void {
@@ -36,11 +45,30 @@ export function registerConfigTool(server: McpServer): void {
     {
       title: 'AsyncThink Configuration',
       description:
-        'Introspect adapters and skills. Use list_adapters to check availability of subordinate CLIs; list_skills to see what skill ids resolve via the registry; reload_skills after editing a user skill file.',
+        'Introspect adapters, skills, and tasks. Use list_adapters to check availability of subordinate CLIs (now includes per-tier limits); list_skills to see what skill ids resolve via the registry; reload_skills after editing a user skill file; list_tasks / cancel_task for async-task introspection.',
       inputSchema: {
         action: z
-          .enum(['list_adapters', 'list_skills', 'reload_skills', 'get', 'set', 'reset'])
+          .enum([
+            'list_adapters',
+            'list_skills',
+            'reload_skills',
+            'list_tasks',
+            'cancel_task',
+            'get',
+            'set',
+            'reset',
+          ])
           .describe('Action to perform.'),
+        // Optional input for cancel_task / list_tasks.
+        taskId: z.string().optional().describe('Task id (cancel_task only).'),
+        cursor: z.string().optional().describe('Pagination cursor (list_tasks only).'),
+        limit: z
+          .number()
+          .int()
+          .min(1)
+          .max(200)
+          .optional()
+          .describe('Page size (list_tasks only; default 50).'),
       },
     },
     async (args) => {
@@ -64,6 +92,7 @@ export function registerConfigTool(server: McpServer): void {
               envOk: envMissing.length === 0,
               envMissing,
               description: m.description,
+              tierLimits: m.tierLimits,
             };
           });
           payload = { adapters };
@@ -75,11 +104,15 @@ export function registerConfigTool(server: McpServer): void {
             skills: skills.map((s) => ({
               name: s.name,
               adapter: s.adapter,
+              intelligence: s.intelligence,
               model: s.model,
               filesGlob: s.filesGlob,
               timeoutMs: s.timeoutMs,
               description: s.description,
               source: s.source,
+              credentials: s.credentials,
+              pinsModel: s.pinsModel ?? null,
+              pinIsCurrent: s.pinIsCurrent,
             })),
           };
           break;
@@ -90,12 +123,41 @@ export function registerConfigTool(server: McpServer): void {
           payload = { reloaded: true, skillCount: skills.length };
           break;
         }
+        case 'list_tasks': {
+          const result = await getTaskExecutor().list({
+            cursor: args.cursor,
+            limit: args.limit,
+            principal: null,
+          });
+          payload = result as unknown as Record<string, unknown>;
+          break;
+        }
+        case 'cancel_task': {
+          if (!args.taskId) {
+            payload = { error: 'invalid_args', message: 'cancel_task requires taskId.' };
+            break;
+          }
+          try {
+            const state = await getTaskExecutor().cancel(args.taskId);
+            payload = state as unknown as Record<string, unknown>;
+          } catch (err) {
+            if (err instanceof TaskNotFoundError) {
+              payload = { error: 'task_not_found', message: err.message };
+              break;
+            }
+            payload = {
+              error: 'task_error',
+              message: err instanceof Error ? err.message : String(err),
+            };
+          }
+          break;
+        }
         case 'get':
         case 'set':
         case 'reset':
           payload = {
             status: 'not_implemented',
-            note: 'General config persistence ships in v2.1. v1 surface is read-only via list_adapters / list_skills.',
+            note: 'General config persistence ships in v2.3+. v2.2 surface is read-only via list_adapters / list_skills / list_tasks plus the cancel_task action.',
           };
           break;
         default:

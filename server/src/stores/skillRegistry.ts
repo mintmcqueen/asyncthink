@@ -15,11 +15,18 @@
  *
  * Anything between the first `---` and the next `---` is the frontmatter;
  * content after the closing `---` is the prompt body.
+ *
+ * v2.2:
+ *   - Parses optional `credentials: <profile>` field (R-CRED-D.1).
+ *   - Derives `pinsModel` / `pinIsCurrent` against an injected manifest
+ *     registry (R6b-D.3). When no registry is supplied, `pinIsCurrent` is
+ *     left undefined.
  */
 
 import { promises as fsp, existsSync, readdirSync, statSync } from 'fs';
 import { join, basename, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import type { ManifestRegistry } from '../core/manifests.js';
 import type { Skill, SkillRegistry } from '../core/skillRegistry.js';
 
 interface RawFrontmatter {
@@ -29,6 +36,7 @@ interface RawFrontmatter {
   files_glob?: unknown;
   timeout_ms?: unknown;
   description?: unknown;
+  credentials?: unknown;
 }
 
 const VALID_TIERS = new Set(['high', 'med', 'low']);
@@ -36,16 +44,20 @@ const VALID_TIERS = new Set(['high', 'med', 'low']);
 export interface FsSkillRegistryOptions {
   pluginSkillsDir?: string;
   userSkillsDir?: string;
+  /** Optional manifest registry for pinIsCurrent derivation (R6b-D.3). */
+  manifests?: ManifestRegistry;
 }
 
 export class FsSkillRegistry implements SkillRegistry {
   private cache: Map<string, Skill> | null = null;
   private readonly pluginSkillsDir: string;
   private readonly userSkillsDir: string;
+  private readonly manifests?: ManifestRegistry;
 
   constructor(opts: FsSkillRegistryOptions = {}) {
     this.pluginSkillsDir = opts.pluginSkillsDir ?? defaultPluginSkillsDir();
     this.userSkillsDir = opts.userSkillsDir ?? defaultUserSkillsDir();
+    this.manifests = opts.manifests;
   }
 
   async list(): Promise<Skill[]> {
@@ -72,6 +84,20 @@ export class FsSkillRegistry implements SkillRegistry {
     // User skills second; overrides plugin.
     for (const skill of await scanFlatStyle(this.userSkillsDir, 'user')) {
       cache.set(skill.name, skill);
+    }
+    // Pin-currency derivation (R6b-D.3): only meaningful when manifests are
+    // available.
+    if (this.manifests) {
+      for (const skill of cache.values()) {
+        if (!skill.pinsModel) continue;
+        try {
+          const m = await this.manifests.get(skill.adapter);
+          if (!m) continue;
+          skill.pinIsCurrent = Object.values(m.tiers).includes(skill.pinsModel);
+        } catch {
+          // leave pinIsCurrent undefined on failure
+        }
+      }
     }
     this.cache = cache;
   }
@@ -141,16 +167,19 @@ async function loadSkillFile(
     typeof fm.intelligence === 'string' && VALID_TIERS.has(fm.intelligence)
       ? (fm.intelligence as 'high' | 'med' | 'low')
       : undefined;
+  const model = typeof fm.model === 'string' ? fm.model : undefined;
   return {
     name,
     adapter: fm.adapter,
     intelligence,
-    model: typeof fm.model === 'string' ? fm.model : undefined,
+    model,
     filesGlob: typeof fm.files_glob === 'string' ? fm.files_glob : undefined,
     timeoutMs: typeof fm.timeout_ms === 'number' ? fm.timeout_ms : undefined,
     description: fm.description,
     promptBody: parsed.body.trim(),
     source,
+    credentials: typeof fm.credentials === 'string' ? fm.credentials : undefined,
+    pinsModel: model ?? null,
   };
 }
 

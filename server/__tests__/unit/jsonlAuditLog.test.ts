@@ -73,4 +73,80 @@ describe('JsonlAuditLog', () => {
       log.record({ kind: 'invoke', adapter: 'codex', durationMs: 1 })
     ).resolves.toBeUndefined();
   });
+
+  // v2.2 — task lifecycle events
+  it('records task.create, task.complete, task.fail, task.cancel, task.expire', async () => {
+    const log = new JsonlAuditLog({ path });
+    await log.record({
+      kind: 'task.create',
+      taskId: 't1',
+      adapter: 'claude',
+      detached: false,
+      principal: null,
+      idempotencyKey: 'K',
+    });
+    await log.record({ kind: 'task.complete', taskId: 't1', adapter: 'claude', durationMs: 5 });
+    await log.record({ kind: 'task.fail', taskId: 't2', adapter: 'codex', durationMs: 1, error: 'oops' });
+    await log.record({ kind: 'task.cancel', taskId: 't3', adapter: 'gemini', reason: 'caller' });
+    await log.record({ kind: 'task.expire', taskId: 't4', adapter: 'codex', reason: 'ttl' });
+    const lines = readFileSync(path, 'utf8').trim().split('\n');
+    const events = lines.map((l) => JSON.parse(l).event);
+    expect(events.map((e) => e.kind)).toEqual([
+      'task.create',
+      'task.complete',
+      'task.fail',
+      'task.cancel',
+      'task.expire',
+    ]);
+  });
+
+  it('records model.substitute event with from/to/tier/reason', async () => {
+    const log = new JsonlAuditLog({ path });
+    await log.record({
+      kind: 'model.substitute',
+      adapter: 'codex',
+      from: 'gpt-DEPRECATED',
+      to: 'gpt-5-codex',
+      tier: 'med',
+      reason: 'skill-pin-stale',
+    });
+    const lines = readFileSync(path, 'utf8').trim().split('\n');
+    const event = JSON.parse(lines[0]).event;
+    expect(event.kind).toBe('model.substitute');
+    expect(event.from).toBe('gpt-DEPRECATED');
+    expect(event.to).toBe('gpt-5-codex');
+  });
+
+  // v2.2 — log rotation (R1-D.1)
+  it('rotates the active log when the oldest entry is older than rotationSpan', async () => {
+    // Build a log file dated yesterday so the rotation kicks in on next constructor.
+    const yesterday = new Date(Date.now() - 25 * 60 * 60_000);
+    const old = JSON.stringify({
+      ts: yesterday.toISOString(),
+      pid: 1,
+      event: { kind: 'invoke', adapter: 'a', durationMs: 1 },
+    });
+    await fsp.writeFile(path, old + '\n', 'utf8');
+    // Construct with rotateOnStart=true (default).
+    new JsonlAuditLog({ path });
+    // Active log should be empty (rotated away).
+    const remaining = (await fsp.readFile(path, 'utf8').catch(() => '')).trim();
+    expect(remaining).toBe('');
+    // An archive should exist.
+    const dirEntries = await fsp.readdir(tmpDir);
+    expect(dirEntries.some((e) => /audit\.jsonl\.\d{4}-\d{2}-\d{2}/.test(e))).toBe(true);
+  });
+
+  it('prunes archives older than retentionMs', async () => {
+    const oldStamp = '2024-01-01';
+    const archive = join(tmpDir, `audit.jsonl.${oldStamp}`);
+    await fsp.writeFile(archive, 'old\n', 'utf8');
+    new JsonlAuditLog({ path });
+    // After construction, the rotation+prune pass should have removed the old archive.
+    const exists = await fsp
+      .stat(archive)
+      .then(() => true)
+      .catch(() => false);
+    expect(exists).toBe(false);
+  });
 });

@@ -1,47 +1,54 @@
 # AsyncThink MCP Server — Developer Documentation
 
-> **Status:** v2.0.0 released. All five refactor phases complete. The v1.1.9 git tag remains the historical pin for v1 behavior.
+> **Status:** v2.2.0 released. Background-jobs (MCP Tasks primitive), tier-model rework, skill-pinning policy, credentials wire-stub. The v1.1.9 git tag remains the historical pin for v1 behavior; v2.0.0 onwards is the modular refactor.
 
 ## Purpose
 
-AsyncThink is an MCP server for sequential thinking with optional parallel forks to subordinate model CLIs. The central orchestrator (Claude Code, in practice) reasons step-by-step and can convene a "council" of independent perspectives — each fork is a fire-and-forget invocation of a different subordinate adapter (claude, gemini, codex). It also exposes a `delegate` tool for single-subordinate threaded conversations. All subordinates are **read-only**: they may navigate files but never edit, exec, or write.
+AsyncThink is an MCP server for sequential thinking with optional parallel forks to subordinate model CLIs. The central orchestrator (Claude Code, in practice) reasons step-by-step and can convene a "council" of independent perspectives — each fork is a fire-and-forget invocation of a different subordinate adapter (claude, gemini, codex). It also exposes a `delegate` tool for single-subordinate threaded conversations and (v2.2) a four-verb async tasks tool surface for long-running work that survives request boundaries. All subordinates are **read-only**: they may navigate files but never edit, exec, or write.
 
-## Tools (six)
+## Tools (ten)
 
 | Tool | Purpose |
 | --- | --- |
-| `asyncthink` | Sequential thinking + parallel forks (council). Auto-closes chain on `nextThoughtNeeded:false`. |
-| `delegate` | Open or continue a single-subordinate thread. Inline `close: true` for one-round-trip. |
+| `asyncthink` | Sequential thinking + parallel forks (council). Auto-closes chain on `nextThoughtNeeded:false`. v2.2: `forks[].async` for detached fire-and-forget. |
+| `delegate` | Open or continue a single-subordinate thread. Inline `close: true` for one-round-trip. v2.2: `async`, `idempotencyKey`, `ttlMs`, `credentials`. |
 | `delegate_close` | Close a thread. Idempotent. |
 | `delegate_close_all` | End-of-session safety net. |
 | `delegate_list_threads` | Introspection: open threads, adapter, idle time. |
-| `asyncthink_config` | View config; list adapters/skills (full action set lands in Phase 5). |
+| `asyncthink_config` | View config: adapters (with tierLimits), skills (with pinsModel/pinIsCurrent), tasks. New v2.2 actions: `list_tasks`, `cancel_task`. |
+| `tasks_get` (v2.2) | Snapshot a task's status. Idempotent. |
+| `tasks_list` (v2.2) | Cursor-paginated list of tasks; principal-bound. |
+| `tasks_cancel` (v2.2) | Best-effort cancel (SIGTERM + state flip). Idempotent. |
+| `tasks_result` (v2.2) | Block until terminal; return the underlying response. |
 
 ## Architecture
 
 ```
-┌──────────────────────────────────────────────────────────┐
-│ MCP Tool Layer                                           │  stable v1→v3
-│   asyncthink, delegate, delegate_close, *_list, _config  │
-├──────────────────────────────────────────────────────────┤
-│ Orchestration                                            │  stable
-│   AsyncThinkingServer  Council  Delegate                 │
-├──────────────────────────────────────────────────────────┤
-│ Adapters                                                 │  stable interface,
-│   impl/{claude,gemini,codex}.ts (TS impls)               │  TS impl per CLI
-│   manifests/{claude,gemini,codex}.json (metadata only)   │
-├──────────────────────────────────────────────────────────┤
-│ Storage                                                  │  swap point for v3
-│   ThreadStore (JsonlThreadStore)                         │
-│   TaskStore   (FsTaskStore)                              │
-│   AuditLog    (Phase 5)                                  │
-│   SkillRegistry (Phase 4)                                │
-├──────────────────────────────────────────────────────────┤
-│ Executor (LocalSubprocessExecutor)                       │  swap point for v3
-└──────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────┐
+│ MCP Tool Layer                                                     │  stable v1→v3
+│   asyncthink, delegate{,_close,_close_all,_list_threads},          │
+│   asyncthink_config, tasks_{get,list,cancel,result}                │
+├────────────────────────────────────────────────────────────────────┤
+│ Orchestration                                                      │  stable
+│   AsyncThinkingServer  Council  Delegate  TaskExecutor (v2.2)      │
+├────────────────────────────────────────────────────────────────────┤
+│ Adapters                                                           │  stable interface,
+│   impl/{claude,gemini,codex}.ts (TS impls)                         │  TS impl per CLI
+│   manifests/{claude,gemini,codex}.json (metadata + tierLimits v2.2)│
+├────────────────────────────────────────────────────────────────────┤
+│ Storage                                                            │  swap point for v3
+│   ThreadStore (JsonlThreadStore)                                   │
+│   TaskStore   (FsTaskStore — idempotency index + TTL sweep v2.2)   │
+│   AuditLog    (JsonlAuditLog — task.* events + 90d rotation v2.2)  │
+│   SkillRegistry (FsSkillRegistry — credentials, pinsModel v2.2)    │
+├────────────────────────────────────────────────────────────────────┤
+│ Executor                                                           │  swap point for v3
+│   LocalSubprocessExecutor (cancel(taskId) v2.2)                    │
+│   LocalInProcessTaskExecutor (v2.2 — wraps subprocess + state)     │
+└────────────────────────────────────────────────────────────────────┘
 ```
 
-Storage and Executor are the swap points for the eventual hosted/SOC2/Vertex v3 — the tool surface and orchestration code stay identical when the cloud port lands.
+Storage and Executor are the swap points for the eventual hosted/SOC2/Vertex v3 — the tool surface and orchestration code stay identical when the cloud port lands. The `TaskExecutor` interface (`server/src/core/taskExecutor.ts`) is v2.2's principal v3 swap point: `LocalInProcessTaskExecutor` ships in v2.2; v3 will substitute `RemoteCompanionTaskExecutor` (OAuth-authed companion daemon) without touching tools/orchestration.
 
 ## Adapters
 
@@ -92,10 +99,11 @@ intelligence: high            # optional — high|med|low (preferred over model)
 files_glob: src/**/*.ts       # optional
 model: gpt-5.5                # optional escape hatch — pin a raw model id
 timeout_ms: 240000            # optional
+credentials: default          # v2.2 — wire-stub for v3 per-delegate creds (R-CRED-D.1)
 ---
 ```
 
-**Model selection — intelligence tiers, not raw ids.** Adapters expose three tiers per their manifest:
+**Model selection — intelligence is a within-adapter ordinal, not a cross-adapter SLA.** Adapters expose three tiers per their manifest. Tiers are ordinals within a single adapter — they do not promise that "claude high" is comparable to "gemini high" on cost, latency, or capability. Read the per-tier facts in `tierLimits` for the concrete numbers.
 
 | Tier | claude | gemini | codex |
 | --- | --- | --- | --- |
@@ -103,7 +111,19 @@ timeout_ms: 240000            # optional
 | `med` | claude-sonnet-4-6 † | gemini-2.5-flash | gpt-5-codex |
 | `low` | claude-haiku-4-5-20251001 | gemini-2.5-flash-lite | gpt-5-mini |
 
-† Anthropic's 30k input-tokens/minute org cap on `claude-opus-4-7` makes opus unreliable for non-trivial council forks (v2.1.1 finding). Claude's `high` and `med` both map to sonnet-4-6 until R6a (tier-model rework in v2.2) revisits. Users with higher rate limits can pin the raw model id via `model: "claude-opus-4-7"` on the call or edit `server/src/adapters/manifests/claude.json`.
+† Anthropic's 30k input-tokens/minute org cap on `claude-opus-4-7` made opus unreliable for non-trivial council forks (v2.1.1 finding). Claude's `high` and `med` both map to sonnet-4-6 in v2.2; users with higher opus rate limits can pin the raw model id via `model: "claude-opus-4-7"` or edit `server/src/adapters/manifests/claude.json`.
+
+**`tierLimits` (v2.2, R6a-D.1)** — each manifest now carries optional per-tier facts surfaced via `asyncthink_config({action:"list_adapters"})`:
+
+```json
+"tierLimits": {
+  "high": { "maxContext": 200000, "rateLimitClass": "standard", "expectedLatencyMsP50": 12000 },
+  "med":  { "maxContext": 200000, "rateLimitClass": "standard", "expectedLatencyMsP50": 12000 },
+  "low":  { "maxContext": 200000, "rateLimitClass": "standard", "expectedLatencyMsP50": 4000  }
+}
+```
+
+`maxContext` is **load-bearing** (R6a-D.2): `LocalInProcessTaskExecutor.start()` runs a pre-flight token check (~4 chars/token heuristic over `prompt + files`) and rejects with `ContextLimitExceededError` before spawning the subprocess. `rateLimitClass` and `expectedLatencyMsP50` are advisory and surface in error envelopes / introspection.
 
 **Conflict detection (v2.1.1, F1):** if a caller or skill supplies BOTH `intelligence` AND `model` AND they resolve to different ids, the adapter throws `TierModelConflictError` rather than silently honoring the raw `model`. Skill frontmatter that pins both fields with conflicting values is reported as a stderr warning at startup via the `conflictValidator`.
 
@@ -114,6 +134,17 @@ Resolution precedence (highest → lowest):
 2. Caller's `intelligence` tier
 3. Skill's frontmatter `intelligence`
 4. Adapter's `defaultTier` (currently `med` for all built-ins)
+
+### Skill-pinning policy (v2.2, R6b-D)
+
+Skills may pin a raw `model:` in frontmatter. Two cases:
+
+- **`pinIsCurrent: true`** — pinned id is in the adapter's current `tiers` map. Pass through verbatim, no warning.
+- **`pinIsCurrent: false`** — pinned id has been retired from the manifest. At dispatch time the SkillResolver substitutes the adapter's `defaultTier` model, emits a stderr warning, and records a `model.substitute` audit event with `from`, `to`, `tier`, and `reason: "skill-pin-stale"`. The skill keeps working through model churn instead of failing loudly.
+
+The substitution is **opt-in** at the resolver layer (driven by passing a `ManifestRegistry` into `resolveSkill`'s context). Direct adapter calls with raw `model` overrides do NOT trigger substitution — escape-hatch overrides are preserved verbatim. F1 conflict-detect still wins: a skill with both `intelligence: low` and `model: <not-low-tier>` is still rejected at registry-load by `conflictValidator`.
+
+`asyncthink_config({action:"list_skills"})` surfaces `pinsModel` (raw id or null) and `pinIsCurrent` (true|false|undefined) per skill (R6b-D.3). `undefined` means the registry was loaded without manifest awareness and the field could not be derived.
 
 The body of the markdown file is the **prompt prefix** — the system context that orients the subordinate before the caller's per-invocation prompt.
 
@@ -127,25 +158,107 @@ The body of the markdown file is the **prompt prefix** — the system context th
 - `architecture-critique` (gemini) — independent design critique of coupling, failure modes, scaling pressure points, evolution paths. Globs to docs and architecture markdown.
 - `test-design` (claude) — coverage analysis focused on intended behavior, weak assertions, missing acceptance tests at system boundaries.
 
-**Slash commands (Phase 4):**
+**Slash commands:**
 - `/asyncthink:critique` — wraps `delegate` with the architecture-critique skill.
 - `/asyncthink:review-pr` — wraps `delegate` with the code-review skill against the current branch's diff vs the integration branch.
+- `/asyncthink:delegate-async` (v2.2) — fire-and-forget delegate that returns a `taskId` immediately.
+- `/asyncthink:tasks` (v2.2) — list async tasks with status, or detail one by id.
+
+## Background Jobs (v2.2)
+
+v2.2 adds support for adapter invocations that survive the request boundary. The architecture follows the **MCP Tasks primitive** (SEP-1686, 2025-11-25 spec, R2-D.1) and ships an in-process executor that's swappable for v3 cloud companion.
+
+### Tool surface
+
+```
+delegate({async: true, prompt, ...})  → {taskId, status: "working", reminder}
+tasks_get({taskId})                   → state snapshot (non-blocking)
+tasks_list({cursor?, limit?})         → paginated list, principal-bound
+tasks_cancel({taskId})                → best-effort SIGTERM + state flip
+tasks_result({taskId})                → blocks until terminal, returns full state
+```
+
+`asyncthink_config` adds `list_tasks` and `cancel_task` action aliases (R4-D.2). The `asyncthink` tool's `forks[]` accepts `async: true` to spawn detached forks that survive chain-end (R-DUR-D.1).
+
+### Lifecycle states
+
+The `LocalInProcessTaskExecutor` uses MCP Tasks spec statuses (`server/src/core/taskExecutor.ts`):
+
+```
+working → completed
+working → failed
+working → cancelled
+working → input_required (reserved; not emitted in v2.2)
+```
+
+Terminal states are sticky — a cancelled task stays cancelled even if its underlying subprocess finishes after the kill signal arrived. (`MUST remain cancelled` per spec.) `tasks_get` and `tasks_result` against terminal tasks return the same state.
+
+### Idempotency (R-DUR-D.3)
+
+Callers may pass `idempotencyKey` on `delegate({async:true})` (or via `_meta["io.asyncthink/idempotency-key"]` on the wire). Repeat calls with the same `(idempotencyKey, principal)` while the original is non-terminal return the original `taskId` instead of spawning a duplicate. After the original reaches a terminal state, the same key is free to spawn a fresh task — there is no transcript replay.
+
+### TTL retention (R-DUR-D.4)
+
+The sweeper runs on every tool call (rate-limited to once per 30s) and reaps tasks per category:
+
+| Status | TTL |
+| --- | --- |
+| `working` / `input_required` | 60 minutes |
+| `completed` | 60 minutes |
+| `failed` | 10 minutes |
+| `cancelled` | 5 minutes |
+
+Caller-supplied `ttlMs` is clamped to `[60s, 60m]`. Reaped tasks emit a `task.expire` audit event and are deleted from the FsTaskStore mirror.
+
+### Cancellation (R-DUR-D.5)
+
+`tasks_cancel({taskId})` flips the state to `cancelled` immediately and signals SIGTERM to the registered subprocess group via `LocalSubprocessExecutor.cancel(taskId)`. SIGKILL follows after a 1s grace. Cancellation is best-effort: the underlying subprocess may take milliseconds to actually exit, but the protocol-visible state flips synchronously. Cancelling a task that hasn't yet spawned (cancellation arrived between `start()` and the subprocess `spawn`) is queued — applied as soon as the process exists.
+
+### Ownership / principal binding (R-DUR-D.2)
+
+Every `TaskState` carries a `principal` field. v2.2 single-tenant local: `principal: null` for everything. v3 will populate from the OAuth subject claim on inbound requests; cross-principal `tasks_get` / `tasks_cancel` already throw `TaskOwnerMismatchError` so the contract is wire-stable.
+
+### v3 trajectory
+
+`server/src/core/taskExecutor.ts` defines the `TaskExecutor` interface. v2.2 ships `LocalInProcessTaskExecutor`. v3 will ship `RemoteCompanionTaskExecutor` — same interface, but execution dispatches via OAuth-authenticated companion daemon. The tool surface, lifecycle states, idempotency semantics, TTL policy, and audit event shapes all stay identical.
+
+## Per-Delegate Credentials (v3 contract; v2.2 wire-only)
+
+`delegate`, `asyncthink` forks, and skill frontmatter accept an optional `credentials: <profile-name>` field (R-CRED-D.1). v2.2 is wire-only: the field is parsed and forwarded through resolution, but only the literal value `"default"` (or absent/empty) is accepted at dispatch time. Any other profile name is rejected with `CredentialsNotSupportedError` pointing at v3 (R-CRED-D.2). The `cred.use` audit event kind is reserved for v3 (R-CRED-D.4) — not emitted in v2.2.
+
+v3 will ship two profile resolvers:
+- `StaticEnvProfileResolver` — reads named env-var bags from a config file (`~/.config/asyncthink/profiles/<name>.env`).
+- `CloudOAuthProfileResolver` — exchanges the request's OAuth token for provider-specific credentials.
+
+This contract lets users plan multi-tenant or per-task credential isolation without taking a runtime dependency on it today.
 
 ## Audit log
 
-`JsonlAuditLog` (`server/src/stores/jsonlAuditLog.ts`) records every adapter invocation and thread-lifecycle event to `~/.local/share/asyncthink/audit.jsonl`. Each line is a JSON object: `{ts, pid, event}`. `event` is either `{kind:"invoke", adapter, durationMs, threadId?, error?}` or `{kind:"thread.open"|"thread.close", threadId, adapter}`.
+`JsonlAuditLog` (`server/src/stores/jsonlAuditLog.ts`) records every adapter invocation, thread lifecycle, task lifecycle, and model-substitution event to `~/.local/share/asyncthink/audit.jsonl`. Each line is a JSON object: `{ts, pid, event}`. Recognized `event.kind` values:
 
-Built from day 1 even though v1 isn't SOC2-attested — capturing logs early means real audit data is available when the v3 cloud port pursues SOC2 Type 1. Failure-isolated: write errors log to stderr but do not break tool calls.
+| `kind` | Fields | Origin |
+| --- | --- | --- |
+| `invoke` | `adapter, durationMs, threadId?, error?` | every adapter call |
+| `thread.open` / `thread.close` | `threadId, adapter` | Delegate / Council lifecycle |
+| `task.create` (v2.2) | `taskId, adapter, detached, principal, idempotencyKey?` | TaskExecutor.start |
+| `task.complete` / `task.fail` (v2.2) | `taskId, adapter, durationMs, error?` | TaskExecutor terminal transition |
+| `task.cancel` / `task.expire` (v2.2) | `taskId, adapter, reason?` | tasks_cancel / sweeper |
+| `model.substitute` (v2.2) | `adapter, from, to, tier, reason` | SkillResolver R6b-D.2 substitution |
+| `cred.use` (reserved) | (deferred to v3 per R-CRED-D.4) | — |
+
+**Rotation (v2.2, R1-D.1)** — on startup and once per 24h, the log is rotated to `audit.jsonl.YYYY-MM-DD` if its oldest entry is more than a day old. Archives older than 90 days are pruned. Built from day 1 even though v1 isn't SOC2-attested — capturing logs early means real audit data is available when the v3 cloud port pursues SOC2 Type 1. Failure-isolated: write errors log to stderr but do not break tool calls.
 
 ## Council (asyncthink forks)
 
 Each `asyncthink` chain has a `chainThreadId`. Forks within a thought are children threads named `<chainThreadId>::<forkId>`. Tasks in `FsTaskStore` use the same scoping so concurrent chains do not collide.
 
 Forks are fire-and-forget: `Council.fork()` registers the in-flight promise and returns immediately. The caller collects results later via `waitFor` or `readResearch`, or lets the final thought (`nextThoughtNeeded:false`) auto-collect everything via `Council.endChain()`. End-of-chain:
-1. Awaits any remaining in-flight forks, up to a per-call timeout (default 180s).
-2. Closes all child threads.
-3. Prunes the chain's tasks from `FsTaskStore`.
+1. Awaits any remaining **non-detached** in-flight forks, up to a per-call timeout (default 180s) (R1-D.2).
+2. Closes child threads for non-detached forks.
+3. Prunes the chain's non-detached tasks from `FsTaskStore`.
 4. Returns aggregated results to the tool handler for inclusion in the response.
+
+**Detached forks (v2.2, R-DUR-D.1)** — `forks[].async: true` spawns the fork through `LocalInProcessTaskExecutor` instead of `Council`. Detached forks bypass chain-end cleanup entirely: they survive past the final thought, are queryable via `tasks_get` / `tasks_result`, and are reaped only by category TTL (working/completed 60m). Their child threads also survive chain-end. Use detached forks when the orchestrator wants research that outlives the conversation turn — e.g. firing a long codex review at the start of a planning chain and harvesting it later. The asyncthink response surfaces detached task ids in `output.detachedTasks` so the caller has the handles to follow up.
 
 ## Plugin distribution
 
@@ -227,8 +340,11 @@ Acceptance specs live as JSON fixtures under `__tests__/contracts/`. The delegat
 ├── threads/                                    # active conversation transcripts
 │   ├── <threadId>.jsonl
 │   └── closed/<threadId>.jsonl                 # closed transcripts retained for inspection
-├── tasks/<sanitizedTaskId>/state.json          # in-flight worker state mirror (debug/audit)
-└── audit.jsonl                                 # Phase 5
+├── tasks/<sanitizedTaskId>/state.json          # task mirror; v2.2 schema includes
+│                                               # detached, principal, idempotencyKey,
+│                                               # taskTtlMs, lastUpdatedAt
+├── audit.jsonl                                 # active log (rotates daily v2.2)
+└── audit.jsonl.YYYY-MM-DD                      # daily archives, 90-day retention (v2.2)
 ```
 
 ## Logging conventions

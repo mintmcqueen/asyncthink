@@ -78,7 +78,7 @@ export class CodexAdapter implements Adapter {
     if (inv.sessionId) {
       argv.push('resume', inv.sessionId);
     }
-    const model = resolveModel(inv, this.tiers, this.defaultTier);
+    const resolved = resolveModel(inv, this.tiers, this.defaultTier, { adapterId: this.id });
     argv.push(
       '--sandbox',
       'read-only',
@@ -89,7 +89,7 @@ export class CodexAdapter implements Adapter {
       '--output-last-message',
       tmp,
       '--model',
-      model,
+      resolved.model,
       '--cd',
       inv.cwd ?? process.cwd(),
       prompt

@@ -145,4 +145,113 @@ describe('FsSkillRegistry', () => {
     });
     expect(await reg.list()).toEqual([]);
   });
+
+  // v2.2 — credentials + pinsModel + pinIsCurrent
+  it('parses optional `credentials` from frontmatter', async () => {
+    writeSkill(
+      pluginDir,
+      'cred-stub',
+      'adapter: codex\ndescription: stub\ncredentials: staging',
+      'body'
+    );
+    const reg = new FsSkillRegistry({ pluginSkillsDir: pluginDir, userSkillsDir: userDir });
+    const s = await reg.get('cred-stub');
+    expect(s?.credentials).toBe('staging');
+  });
+
+  it('credentials field absent → undefined', async () => {
+    writeSkill(pluginDir, 'no-cred', 'adapter: codex\ndescription: x', 'body');
+    const reg = new FsSkillRegistry({ pluginSkillsDir: pluginDir, userSkillsDir: userDir });
+    const s = await reg.get('no-cred');
+    expect(s?.credentials).toBeUndefined();
+  });
+
+  it('pinsModel exposes the raw model id from frontmatter', async () => {
+    writeSkill(
+      pluginDir,
+      'pinned',
+      'adapter: codex\ndescription: x\nmodel: gpt-5-codex',
+      'body'
+    );
+    const reg = new FsSkillRegistry({ pluginSkillsDir: pluginDir, userSkillsDir: userDir });
+    const s = await reg.get('pinned');
+    expect(s?.pinsModel).toBe('gpt-5-codex');
+  });
+
+  it('pinsModel is null when no model is pinned', async () => {
+    writeSkill(pluginDir, 'unpinned', 'adapter: codex\ndescription: x', 'body');
+    const reg = new FsSkillRegistry({ pluginSkillsDir: pluginDir, userSkillsDir: userDir });
+    const s = await reg.get('unpinned');
+    expect(s?.pinsModel).toBeNull();
+  });
+
+  it('pinIsCurrent: true when pinned model is in adapter manifest tiers', async () => {
+    writeSkill(
+      pluginDir,
+      'fresh-pin',
+      'adapter: codex\ndescription: x\nmodel: gpt-5-codex',
+      'body'
+    );
+    const fakeRegistry = {
+      async loadAll() {
+        return [
+          {
+            id: 'codex',
+            displayName: 'Codex',
+            binary: 'codex',
+            tiers: { high: 'gpt-5.5', med: 'gpt-5-codex', low: 'gpt-5-mini' } as const,
+            defaultTier: 'med' as const,
+            requiredEnv: [],
+            defaultTimeoutMs: 1,
+          },
+        ];
+      },
+      async get(id: string) {
+        return (await this.loadAll()).find((m: { id: string }) => m.id === id);
+      },
+    };
+    const reg = new FsSkillRegistry({
+      pluginSkillsDir: pluginDir,
+      userSkillsDir: userDir,
+      manifests: fakeRegistry,
+    });
+    const s = await reg.get('fresh-pin');
+    expect(s?.pinsModel).toBe('gpt-5-codex');
+    expect(s?.pinIsCurrent).toBe(true);
+  });
+
+  it('pinIsCurrent: false when pinned model is NOT in adapter manifest tiers', async () => {
+    writeSkill(
+      pluginDir,
+      'stale-pin',
+      'adapter: codex\ndescription: x\nmodel: gpt-DEPRECATED',
+      'body'
+    );
+    const fakeRegistry = {
+      async loadAll() {
+        return [
+          {
+            id: 'codex',
+            displayName: 'Codex',
+            binary: 'codex',
+            tiers: { high: 'gpt-5.5', med: 'gpt-5-codex', low: 'gpt-5-mini' } as const,
+            defaultTier: 'med' as const,
+            requiredEnv: [],
+            defaultTimeoutMs: 1,
+          },
+        ];
+      },
+      async get(id: string) {
+        return (await this.loadAll()).find((m: { id: string }) => m.id === id);
+      },
+    };
+    const reg = new FsSkillRegistry({
+      pluginSkillsDir: pluginDir,
+      userSkillsDir: userDir,
+      manifests: fakeRegistry,
+    });
+    const s = await reg.get('stale-pin');
+    expect(s?.pinsModel).toBe('gpt-DEPRECATED');
+    expect(s?.pinIsCurrent).toBe(false);
+  });
 });

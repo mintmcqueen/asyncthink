@@ -10,7 +10,7 @@
  * threads closed, and the chain's task records pruned.
  */
 import { z } from 'zod';
-import { getCouncil, getThinking, getSkillRegistry } from '../app.js';
+import { getCouncil, getThinking, getSkillRegistry, getManifestRegistry, getAuditLog, } from '../app.js';
 import { sweepIdleOnce } from '../delegate/sweeper.js';
 import { resolveSkill } from '../skills/resolver.js';
 const DEFAULT_FORK_TIMEOUT_MS = 180_000;
@@ -56,6 +56,14 @@ export function registerAsyncThinkTool(server) {
                     .string()
                     .optional()
                     .describe('Skill id; supplies adapter + prompt prefix from the registry.'),
+                async: z
+                    .boolean()
+                    .optional()
+                    .describe('v2.2 — fire-and-forget detached fork. Survives chain end; reaped by TTL sweeper. Returns immediately as a task id, queryable via tasks_get.'),
+                credentials: z
+                    .string()
+                    .optional()
+                    .describe("v2.2 — credential profile name. v2.2 only accepts 'default'; non-default profiles will be supported in v3."),
             }))
                 .optional()
                 .describe('Forks to spawn during this thought.'),
@@ -94,6 +102,7 @@ export function registerAsyncThinkTool(server) {
         const parsedThought = JSON.parse(thoughtResult.content[0].text);
         // 3. Spawn forks (fire-and-forget). Resolve skills first.
         const spawnErrors = [];
+        const detachedTaskIds = [];
         if (args.forks) {
             for (const f of args.forks) {
                 try {
@@ -101,6 +110,7 @@ export function registerAsyncThinkTool(server) {
                     let prompt = f.prompt;
                     let intelligence = f.intelligence;
                     let model = f.model;
+                    let credentials = f.credentials;
                     if (f.skill) {
                         const resolved = await resolveSkill(getSkillRegistry(), {
                             skill: f.skill,
@@ -108,14 +118,40 @@ export function registerAsyncThinkTool(server) {
                             callerAdapter: f.adapter,
                             callerIntelligence: f.intelligence,
                             callerModel: f.model,
-                        });
+                            callerCredentials: f.credentials,
+                        }, { manifests: getManifestRegistry(), auditLog: getAuditLog() });
                         adapter = resolved.adapter;
                         prompt = resolved.prompt;
                         intelligence = resolved.intelligence;
                         model = resolved.model;
+                        credentials = resolved.credentials;
                     }
                     if (!adapter) {
                         throw new Error(`fork "${f.id}": either adapter or skill must be supplied.`);
+                    }
+                    // R-CRED-D.2: any non-default profile is rejected at fork time.
+                    if (credentials !== undefined && credentials !== '' && credentials !== 'default') {
+                        throw new Error(`fork "${f.id}": credential profile "${credentials}" is not supported in v2.2 ` +
+                            '(R-CRED-D.2). Drop the credentials argument or pass "default".');
+                    }
+                    // v2.2 — async forks bypass chain-end and run via TaskExecutor.
+                    if (f.async) {
+                        const { getTaskExecutor } = await import('../app.js');
+                        const state = await getTaskExecutor().start({
+                            adapter,
+                            prompt,
+                            files: f.files,
+                            intelligence,
+                            model,
+                            detached: true,
+                            principal: null,
+                            credentials,
+                            threadId: `${chainId}::${f.id}`,
+                            parentChainId: chainId,
+                            skill: f.skill,
+                        });
+                        detachedTaskIds.push({ forkId: f.id, taskId: state.taskId });
+                        continue;
                     }
                     await council.fork({
                         id: f.id,
@@ -192,6 +228,7 @@ export function registerAsyncThinkTool(server) {
             research: status,
             ...(researchResults.length > 0 && { researchResults }),
             ...(spawnErrors.length > 0 && { spawnErrors }),
+            ...(detachedTaskIds.length > 0 && { detachedTasks: detachedTaskIds }),
             ...(reminder && { reminder }),
         };
         return {

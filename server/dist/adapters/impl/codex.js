@@ -60,8 +60,8 @@ export class CodexAdapter {
         if (inv.sessionId) {
             argv.push('resume', inv.sessionId);
         }
-        const model = resolveModel(inv, this.tiers, this.defaultTier);
-        argv.push('--sandbox', 'read-only', '--json', '--skip-git-repo-check', '--color', 'never', '--output-last-message', tmp, '--model', model, '--cd', inv.cwd ?? process.cwd(), prompt);
+        const resolved = resolveModel(inv, this.tiers, this.defaultTier, { adapterId: this.id });
+        argv.push('--sandbox', 'read-only', '--json', '--skip-git-repo-check', '--color', 'never', '--output-last-message', tmp, '--model', resolved.model, '--cd', inv.cwd ?? process.cwd(), prompt);
         const result = await exec.run({
             bin: 'codex',
             argv,

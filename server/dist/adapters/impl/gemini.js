@@ -39,7 +39,7 @@ export class GeminiAdapter {
         this.defaultTier = opts.defaultTier ?? 'med';
     }
     async invoke(inv, exec) {
-        const model = resolveModel(inv, this.tiers, this.defaultTier);
+        const resolved = resolveModel(inv, this.tiers, this.defaultTier, { adapterId: this.id });
         const argv = [
             '-p',
             inv.prompt,
@@ -53,7 +53,7 @@ export class GeminiAdapter {
             // sandbox is still --approval-mode plan (read-only).
             '--skip-trust',
             '-m',
-            model,
+            resolved.model,
         ];
         if (inv.files?.length) {
             const dirs = uniqueDirs(inv.files);

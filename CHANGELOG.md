@@ -10,6 +10,65 @@ All notable changes to AsyncThink are documented here. The format follows [Keep 
 - Set plugin and marketplace author to `mintmcqueen`.
 - GitHub default branch set to `develop` so plugin installs pull v2 code by default.
 
+## [2.2.0] — 2026-04-27
+
+Background jobs (MCP Tasks primitive), tier-model rework with load-bearing `tierLimits`, skill-pinning successor-substitution policy, and per-delegate credentials wire-stub for v3. Purely additive at the source level. The full ruling set lives at `dev/research/R7-framework.md`.
+
+### Added — Background Jobs (R2-D, R3-D, R-DUR-D)
+- `TaskExecutor` interface (`server/src/core/taskExecutor.ts`) — lifecycle + progress hooks. Designed as the v3 swap point.
+- `LocalInProcessTaskExecutor` (`server/src/exec/localInProcessTaskExecutor.ts`) — v2.2 in-process implementation. Spawns the adapter via Promise + `LocalSubprocessExecutor`, mirrors state into `FsTaskStore`, supports idempotency dedup, pre-flight context check, principal binding, and best-effort cancel. (R3-D.1, R3-D.2)
+- Four new MCP tools: `tasks_get`, `tasks_list`, `tasks_cancel`, `tasks_result` (`server/src/tools/tasks.tool.ts`). Surface MCP Tasks RPC verbs (SEP-1686) as user-callable tools. (R2-D.1, R4-D.1)
+- `delegate({async: true, ...})` returns `{taskId}` and runs the work in the background through the TaskExecutor. Sync path (`async: false` default) is unchanged. (R4-D)
+- `asyncthink({forks[].async: true})` spawns detached forks that survive chain-end (R-DUR-D.1). The response surfaces detached task ids in `output.detachedTasks`.
+- `asyncthink_config` gains `list_tasks` and `cancel_task` action aliases. (R4-D.2)
+- Two new slash commands: `/asyncthink:delegate-async` and `/asyncthink:tasks`. (R4-D.3)
+- `TaskState` schema extended with `detached`, `principal`, `idempotencyKey`, `taskTtlMs`, `lastUpdatedAt`, `parentChainId`, `sessionId`, `substitutedFrom`, `exitCode`. Backward-compatible: legacy v2.0 status strings (`pending|running|complete|failed`) still parse, alongside MCP spec strings (`working|input_required|completed|failed|cancelled`).
+- `FsTaskStore.findByIdempotencyKey(key, principal)` — non-terminal dedup lookup. (R-DUR-D.3)
+- `FsTaskStore.cleanupStale()` reaps tasks per category TTL (working/completed 60m, failed 10m, cancelled 5m). Caller `ttlMs` clamped to `[60s, 60m]`. (R-DUR-D.4)
+- `FsTaskStore.list()` — full task enumeration for the executor's list method.
+- `LocalSubprocessExecutor.cancel(taskId)` + `bindNextSpawn(taskId)` — caller-initiated cancel via SIGTERM (SIGKILL after 1s grace). Pre-spawn cancellation is queued and applied as soon as the subprocess exists. (R-DUR-D.5)
+- `Council.endChain` skips detached tasks; awaits non-detached via `Promise.allSettled` with the existing 180s timeout. Detached forks are queryable via `tasks_get` past chain-end. (R1-D.2)
+- Sweeper extends to also reap stale tasks (`server/src/delegate/sweeper.ts`). Same 30s rate-limit semantics as the thread sweep.
+
+### Added — Tier-model rework (R6a-D)
+- `AdapterManifest.tierLimits` schema in `server/src/core/manifests.ts`. Per-tier facts: `maxContext`, `rateLimitClass` ('standard'|'rate-limited'|'unlimited'), `expectedLatencyMsP50`. Validated on manifest load.
+- Real values shipped for claude/gemini/codex (`server/src/adapters/manifests/*.json`):
+  - claude: 200k maxContext (all tiers), standard rate-limit class.
+  - gemini: 1M maxContext (all tiers), standard rate-limit class.
+  - codex: 400k maxContext (high/med), 128k (low), standard rate-limit class.
+- Pre-flight context-size check (`tierResolver.checkContextLimit`) runs in `LocalInProcessTaskExecutor.start()` and rejects with `ContextLimitExceededError` before spawning. Heuristic: ~4 chars/token over `prompt + files` byte size.
+- Documented within-adapter ordinal framing: "intelligence is a within-adapter ordinal, not a cross-adapter SLA." Surfaces in CLAUDE.md tier section.
+
+### Added — Skill-pinning policy (R6b-D)
+- `Skill.pinsModel` and `Skill.pinIsCurrent` fields surfaced via `asyncthink_config({action:"list_skills"})`. (R6b-D.3)
+- `FsSkillRegistry` accepts an optional `manifests: ManifestRegistry` constructor argument; when supplied, `pinIsCurrent` is derived from the adapter's current `tiers` map.
+- `resolveSkill` accepts an optional context (`SkillResolutionContext`) with `manifests` and `auditLog`. When the context provides manifests, a skill that pins a raw `model:` not in the adapter's current tier map triggers R6b-D.2 successor substitution: the skill's model is rewritten to the adapter's `defaultTier` model, a stderr warning is emitted, and a `model.substitute` audit event is recorded with `from`, `to`, `tier`, and `reason: "skill-pin-stale (skill=...)"`. Caller's raw `model` override always wins (no substitution). (R6b-D.1, R6b-D.2)
+- `tierResolver.resolveModel` now returns `ResolveModelResult { model, tier, substitutedFrom?, limits? }` instead of a bare string. Adapters updated. Default behavior preserves v2.1.1 semantics — raw model overrides pass through verbatim unless `substituteStaleSkillPin: true` is opted in (currently used only via the skill resolver).
+
+### Added — Per-delegate credentials wire-stub (R-CRED-D)
+- `credentials: string` field on `delegate` args, `asyncthink` forks, and skill frontmatter. Wire-only in v2.2 (R-CRED-D.1).
+- v2.2 stub: any non-default profile is rejected with `CredentialsNotSupportedError` pointing at v3 (R-CRED-D.2). The literal `"default"` (or absent/empty) is accepted.
+- `cred.use` audit event kind reserved (R-CRED-D.4) — not emitted in v2.2.
+
+### Added — Audit log enhancements (R1-D.1)
+- New event kinds: `task.create`, `task.complete`, `task.fail`, `task.cancel`, `task.expire`, `model.substitute`. All emitted from the corresponding lifecycle points.
+- 90-day rolling window with daily rotation. On startup and once per 24h, the active log is rotated to `audit.jsonl.YYYY-MM-DD` if its oldest entry is older than a day. Archives older than 90 days are pruned.
+
+### Tests
+- New `taskExecutor.test.ts` (24 tests): lifecycle, idempotency, cancel, TTL, cross-principal rejection, cred-stub, pre-flight context check.
+- New `tasksProtocol.test.ts` (4 tests): end-to-end Tasks tool surface flow.
+- New `delegateAsync.test.ts` (4 tests): delegate({async:true}) lifecycle.
+- New `tierResolver.test.ts` (12 tests): conflict detection, successor substitution opt-in, pre-flight context check.
+- New `tasks.live.test.ts` (1 test, RUN_LIVE=1): real claude PONG via TaskExecutor.
+- Extensions: `skillRegistry.test.ts` (+5 tests), `skillResolver.test.ts` (+6 tests), `fsTaskStore.test.ts` (+7 tests), `jsonlAuditLog.test.ts` (+4 tests), `localSubprocess.test.ts` (+2 tests).
+- Total: **196 unit + integration tests passing** (was 128). All idempotent — every test sets up and tears down its own state under tmp dirs.
+
+### Migration
+- v2.2.0 is purely additive at the source level. No breaking changes to tool args, schema, or wire format. Existing v2.1.1 user state under `~/.local/share/asyncthink/` reads cleanly:
+  - On-disk task records are augmented with new fields on next update (`detached`, `principal`, `idempotencyKey`, `taskTtlMs`, `lastUpdatedAt` default to safe values for any pre-v2.2 entries).
+  - Audit log rotation kicks in on first startup if `audit.jsonl` is older than a day; the first archive is created and the active log starts fresh.
+- Rollback: `v2.2.0` ships as a single squash commit on develop. `git revert <squash>` restores v2.1.1 state. User XDG state survives rollback.
+
 ## [2.1.1] — 2026-04-26
 
 Fix-pack from real-use of v2.1.0. No new features; four bugs surfaced during real council/delegate testing, fixed in parallel with the v2.2 background-jobs research kickoff.

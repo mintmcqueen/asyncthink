@@ -10,23 +10,41 @@
  *    turn's sessionId; the adapter uses its CLI's resume primitive.
  *  - 'replay' adapters (claude, gemini): the orchestrator serializes prior
  *    turns into the prompt itself before invoking.
+ *
+ * v2.2: optional `async: true` mode (R4-D). When set, the Delegate routes
+ * the call through the injected TaskExecutor and returns an AsyncDelegate
+ * envelope ({taskId, status: 'working'}) instead of the synchronous
+ * DelegateResponse. Callers poll via `tasks/get`, block via `tasks/result`,
+ * or cancel via `tasks/cancel`. The synchronous path is unchanged.
  */
 import { randomUUID } from 'crypto';
+import { CredentialsNotSupportedError, } from '../core/taskExecutor.js';
 const REMINDER_OPEN = 'Thread is open. Call delegate_close({threadId}) when this conversation is done. ' +
     'Idle threads are auto-swept after 6 hours.';
 const REMINDER_CLOSED = 'Thread closed.';
+const REMINDER_ASYNC = 'Async task created. Poll status via tasks/get({taskId}); fetch result via ' +
+    'tasks/result({taskId}); cancel via tasks/cancel({taskId}). Idle tasks expire per ' +
+    'category TTL (working/completed 60m, failed 10m, cancelled 5m).';
 export class Delegate {
     adapters;
     threadStore;
     executor;
     auditLog;
-    constructor(adapters, threadStore, executor, auditLog) {
+    taskExecutor;
+    constructor(adapters, threadStore, executor, auditLog, taskExecutor) {
         this.adapters = adapters;
         this.threadStore = threadStore;
         this.executor = executor;
         this.auditLog = auditLog;
+        this.taskExecutor = taskExecutor;
     }
+    /** Synchronous turn — returns the assistant response inline. */
     async run(req) {
+        if (req.credentials !== undefined &&
+            req.credentials !== '' &&
+            req.credentials !== 'default') {
+            throw new CredentialsNotSupportedError(req.credentials);
+        }
         const adapter = this.adapters.get(req.adapter);
         if (!adapter) {
             const known = this.adapters.list().map((a) => a.id).join(', ');
@@ -106,6 +124,47 @@ export class Delegate {
             exitCode: result.exitCode,
             durationMs: result.durationMs,
             reminder: closed ? REMINDER_CLOSED : REMINDER_OPEN,
+        };
+    }
+    /**
+     * Async turn (v2.2). Routes through the injected TaskExecutor; returns
+     * `{taskId, status}` immediately. Subsequent polling/blocking happens via
+     * `tasks/get`, `tasks/result`, `tasks/cancel`.
+     *
+     * Idempotency: if `req.idempotencyKey` is supplied and a non-terminal
+     * task with the same `(idempotencyKey, principal)` exists, the existing
+     * taskId is returned (R-DUR-D.3).
+     */
+    async runAsync(req) {
+        if (!this.taskExecutor) {
+            throw new Error('Async delegate requested but no TaskExecutor was injected.');
+        }
+        const adapter = this.adapters.get(req.adapter);
+        if (!adapter) {
+            const known = this.adapters.list().map((a) => a.id).join(', ');
+            throw new Error(`Unknown adapter "${req.adapter}". Registered: ${known}`);
+        }
+        const state = await this.taskExecutor.start({
+            adapter: req.adapter,
+            prompt: req.prompt,
+            files: req.files,
+            intelligence: req.intelligence,
+            model: req.model,
+            timeoutMs: req.timeoutMs,
+            cwd: req.cwd,
+            idempotencyKey: req.idempotencyKey,
+            detached: true, // async delegates are detached by default (independent of any chain)
+            principal: req.principal ?? null,
+            ttlMs: req.ttlMs,
+            credentials: req.credentials,
+            threadId: req.threadId,
+            skill: req.skill,
+        });
+        return {
+            taskId: state.taskId,
+            adapter: state.adapter,
+            status: state.status,
+            reminder: REMINDER_ASYNC,
         };
     }
 }

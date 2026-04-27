@@ -10,6 +10,20 @@
  * JSON templating. Metadata templates well; execution doesn't.
  */
 export type IntelligenceTier = 'high' | 'med' | 'low';
+/** Rate-limit class advisory for the resolved model (R6a-D.1). */
+export type RateLimitClass = 'standard' | 'rate-limited' | 'unlimited';
+/**
+ * Per-tier facts (R6a-D.1). All fields are optional; missing fields mean
+ * "no advisory available" — callers should not assume defaults.
+ */
+export interface TierLimits {
+    /** Approximate maximum input-context tokens for this tier's model. */
+    maxContext?: number;
+    /** Rate-limit class advisory; surfaced in error envelopes (R6a-D.2). */
+    rateLimitClass?: RateLimitClass;
+    /** Expected p50 latency in milliseconds (informational only). */
+    expectedLatencyMsP50?: number;
+}
 export interface AdapterManifest {
     /** Must match the adapter impl's id. */
     id: string;
@@ -35,6 +49,13 @@ export interface AdapterManifest {
     defaultTimeoutMs: number;
     /** Free-text human description. */
     description?: string;
+    /**
+     * v2.2 — per-tier facts (max context, rate-limit class, expected latency).
+     * Load-bearing: pre-flight context-size check uses `maxContext` to reject
+     * oversized prompts; rate-limit-class shows up in error envelopes.
+     * (R6a-D.1, R6a-D.2)
+     */
+    tierLimits?: Partial<Record<IntelligenceTier, TierLimits>>;
 }
 export interface ManifestRegistry {
     /** Load all manifests from the bundled adapters/manifests/ dir. */

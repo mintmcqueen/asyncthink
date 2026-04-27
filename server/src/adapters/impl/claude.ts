@@ -56,9 +56,9 @@ export class ClaudeAdapter implements Adapter {
   }
 
   async invoke(inv: AdapterInvocation, exec: Executor): Promise<AdapterResult> {
-    const model = resolveModel(inv, this.tiers, this.defaultTier);
+    const resolved = resolveModel(inv, this.tiers, this.defaultTier, { adapterId: this.id });
     const prompt = renderPrompt(inv);
-    const argv: string[] = ['--print', '--model', model, prompt];
+    const argv: string[] = ['--print', '--model', resolved.model, prompt];
 
     const result = await exec.run({
       bin: 'claude',

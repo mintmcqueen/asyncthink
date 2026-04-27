@@ -22,6 +22,37 @@ export type AuditEvent =
       kind: 'thread.open' | 'thread.close';
       threadId: string;
       adapter: string;
+    }
+  // v2.2 task lifecycle events (R1-D.1).
+  | {
+      kind: 'task.create';
+      taskId: string;
+      adapter: string;
+      detached: boolean;
+      principal: string | null;
+      idempotencyKey?: string;
+    }
+  | {
+      kind: 'task.complete' | 'task.fail';
+      taskId: string;
+      adapter: string;
+      durationMs: number;
+      error?: string;
+    }
+  | {
+      kind: 'task.cancel' | 'task.expire';
+      taskId: string;
+      adapter: string;
+      reason?: string;
+    }
+  // v2.2 model-substitution event (R6b-D.2).
+  | {
+      kind: 'model.substitute';
+      adapter: string;
+      from: string;
+      to: string;
+      tier: 'high' | 'med' | 'low';
+      reason: string;
     };
 
 export interface AuditLog {

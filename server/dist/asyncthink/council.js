@@ -152,12 +152,25 @@ export class Council {
         }
         return { pending, complete, failed };
     }
-    /** Wait for all pending forks in the chain, close child threads, prune tasks. */
+    /**
+     * Wait for non-detached forks in the chain, close their child threads,
+     * prune their tasks. Detached forks (R-DUR-D.1) are immune: they survive
+     * past chain end and are reaped by the TTL sweeper.
+     */
     async endChain(parentThreadId, timeoutMs) {
         const prefix = `${parentThreadId}::`;
+        // Collect detached task ids so we exclude them from chain-end work.
+        const detachedIds = new Set();
+        if (this.taskStore.list) {
+            for (const t of await this.taskStore.list()) {
+                if (t.id.startsWith(prefix) && t.detached === true) {
+                    detachedIds.add(t.id);
+                }
+            }
+        }
         const promises = [];
         for (const [tid, p] of this.inflight) {
-            if (tid.startsWith(prefix))
+            if (tid.startsWith(prefix) && !detachedIds.has(tid))
                 promises.push(p);
         }
         if (promises.length > 0) {
@@ -167,9 +180,18 @@ export class Council {
             ]);
         }
         const results = [];
-        for (const status of ['complete', 'failed', 'running', 'pending']) {
+        for (const status of [
+            'complete',
+            'completed',
+            'failed',
+            'running',
+            'working',
+            'pending',
+        ]) {
             for (const t of await this.taskStore.byStatus(status)) {
                 if (!t.id.startsWith(prefix))
+                    continue;
+                if (detachedIds.has(t.id))
                     continue;
                 const forkId = t.id.slice(prefix.length);
                 const r = resultFromTask(t, forkId, parentThreadId);
@@ -177,16 +199,18 @@ export class Council {
                     results.push(r);
             }
         }
-        // Close child threads.
+        // Close child threads (non-detached only).
         for (const t of await this.threadStore.list()) {
-            if (t.threadId.startsWith(prefix)) {
-                await this.threadStore.close(t.threadId);
-                await this.auditLog?.record({
-                    kind: 'thread.close',
-                    threadId: t.threadId,
-                    adapter: t.adapter,
-                });
-            }
+            if (!t.threadId.startsWith(prefix))
+                continue;
+            if (detachedIds.has(t.threadId))
+                continue;
+            await this.threadStore.close(t.threadId);
+            await this.auditLog?.record({
+                kind: 'thread.close',
+                threadId: t.threadId,
+                adapter: t.adapter,
+            });
         }
         // Prune tasks from the store.
         for (const r of results) {

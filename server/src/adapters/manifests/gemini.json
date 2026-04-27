@@ -8,6 +8,11 @@
     "low": "gemini-2.5-flash-lite"
   },
   "defaultTier": "med",
+  "tierLimits": {
+    "high": { "maxContext": 1000000, "rateLimitClass": "standard", "expectedLatencyMsP50": 18000 },
+    "med": { "maxContext": 1000000, "rateLimitClass": "standard", "expectedLatencyMsP50": 6000 },
+    "low": { "maxContext": 1000000, "rateLimitClass": "standard", "expectedLatencyMsP50": 3000 }
+  },
   "requiredEnv": ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
   "defaultTimeoutMs": 180000,
   "description": "Google Gemini CLI in --approval-mode plan (read-only navigation) for fast metacognitive research with native session resume."

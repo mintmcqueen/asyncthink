@@ -83,6 +83,35 @@ function validate(value, path) {
     if (!VALID_TIERS.includes(obj.defaultTier)) {
         throw new Error(`Manifest at ${path} has invalid defaultTier (must be one of ${VALID_TIERS.join(', ')})`);
     }
+    // Optional tierLimits validation (R6a-D.1).
+    if (obj.tierLimits !== undefined) {
+        if (typeof obj.tierLimits !== 'object' || obj.tierLimits === null) {
+            throw new Error(`Manifest at ${path} has invalid tierLimits (must be object or absent)`);
+        }
+        const limits = obj.tierLimits;
+        for (const tier of VALID_TIERS) {
+            const entry = limits[tier];
+            if (entry === undefined)
+                continue;
+            if (typeof entry !== 'object' || entry === null) {
+                throw new Error(`Manifest at ${path} tierLimits["${tier}"] must be an object`);
+            }
+            const e = entry;
+            if (e.maxContext !== undefined && (typeof e.maxContext !== 'number' || e.maxContext <= 0)) {
+                throw new Error(`Manifest at ${path} tierLimits["${tier}"].maxContext must be a positive number`);
+            }
+            if (e.rateLimitClass !== undefined &&
+                e.rateLimitClass !== 'standard' &&
+                e.rateLimitClass !== 'rate-limited' &&
+                e.rateLimitClass !== 'unlimited') {
+                throw new Error(`Manifest at ${path} tierLimits["${tier}"].rateLimitClass must be 'standard'|'rate-limited'|'unlimited'`);
+            }
+            if (e.expectedLatencyMsP50 !== undefined &&
+                (typeof e.expectedLatencyMsP50 !== 'number' || e.expectedLatencyMsP50 < 0)) {
+                throw new Error(`Manifest at ${path} tierLimits["${tier}"].expectedLatencyMsP50 must be a non-negative number`);
+            }
+        }
+    }
     return obj;
 }
 function defaultManifestsDir() {
