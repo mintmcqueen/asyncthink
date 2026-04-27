@@ -44,7 +44,7 @@ describe('ClaudeAdapter', () => {
 });
 
 describe('GeminiAdapter', () => {
-  it('emits -p, --output-format json, --approval-mode plan, -m', async () => {
+  it('emits -p, --output-format json, --approval-mode plan, --skip-trust, -m', async () => {
     const a = new GeminiAdapter({ defaultModel: 'gemini-default' });
     const exec = new RecordingExecutor();
     await a.invoke({ prompt: 'PING' }, exec);
@@ -56,6 +56,7 @@ describe('GeminiAdapter', () => {
     expect(argv[argv.indexOf('--output-format') + 1]).toBe('json');
     expect(argv).toContain('--approval-mode');
     expect(argv[argv.indexOf('--approval-mode') + 1]).toBe('plan');
+    expect(argv).toContain('--skip-trust');
     expect(argv).toContain('-m');
     expect(argv[argv.indexOf('-m') + 1]).toBe('gemini-default');
   });

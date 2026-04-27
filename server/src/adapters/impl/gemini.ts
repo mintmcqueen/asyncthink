@@ -44,6 +44,11 @@ export class GeminiAdapter implements Adapter {
       'json',
       '--approval-mode',
       'plan',
+      // Modern gemini-cli refuses approval-mode overrides outside "trusted"
+      // folders. We invoke programmatically from arbitrary cwds; --skip-trust
+      // is the documented way to bypass the prompt for headless use. The
+      // sandbox is still --approval-mode plan (read-only).
+      '--skip-trust',
       '-m',
       inv.model ?? this.defaultModel,
     ];

@@ -245,7 +245,7 @@ RUN_LIVE=1 npm test
 ## Live-test status on this dev environment
 
 - **claude** PONG live test passes.
-- **gemini** — installed `gemini-cli` is v0.1.3, predates the modern flag set the adapter targets (`--output-format`, `--approval-mode`, `--include-directories`, `--resume`). Live test fails until the CLI is upgraded; unit tests verify the modern argv shape regardless. README in Phase 5 documents the minimum gemini-cli version.
+- **gemini** — verified live PONG against gemini-cli v0.39.x with the modern flag set (`--output-format json`, `--approval-mode plan`, `--include-directories`, `-r/--resume`, `--skip-trust`). Adapter passes `--skip-trust` because modern gemini-cli refuses `--approval-mode` overrides outside "trusted" folders, and we invoke from arbitrary cwds. Minimum version: gemini-cli ≥ 0.39.
 - **codex** — installed `codex` v0.47.0; auth currently shows 401 Unauthorized. Run `codex login` or set `OPENAI_API_KEY` to enable live tests.
 
 These are environmental, not code. Unit tests prove adapter argv correctness.

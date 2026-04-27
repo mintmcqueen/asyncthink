@@ -2,6 +2,12 @@
 
 All notable changes to AsyncThink are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.1] — 2026-04-26
+
+### Fixed
+- Gemini adapter now passes `--skip-trust` so `--approval-mode plan` works outside "trusted" folders. Modern gemini-cli (≥ v0.39) blocks approval-mode overrides in untrusted directories by default, which broke headless invocation from any cwd. Documented minimum gemini-cli version. Live PONG test passes against gemini-cli 0.39.1.
+- Updated golden-argv test for gemini to assert `--skip-trust`.
+
 ## [2.0.0] — 2026-04-26
 
 Ground-up refactor: subordinate-CLI adapter framework, threaded delegate tool, parallel council, skills, audit log. v1 reference code deleted; `@google/genai` dependency dropped. See per-phase entries below for implementation detail.
