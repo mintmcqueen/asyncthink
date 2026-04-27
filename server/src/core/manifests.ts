@@ -10,6 +10,8 @@
  * JSON templating. Metadata templates well; execution doesn't.
  */
 
+export type IntelligenceTier = 'high' | 'med' | 'low';
+
 export interface AdapterManifest {
   /** Must match the adapter impl's id. */
   id: string;
@@ -17,8 +19,14 @@ export interface AdapterManifest {
   displayName: string;
   /** Path-resolved CLI binary. */
   binary: string;
-  /** Default model id used when an invocation does not specify one. */
-  defaultModel: string;
+  /**
+   * Model id per intelligence tier. Callers select by tier (`intelligence:
+   * "high"`); raw model overrides are still allowed as an escape hatch.
+   * Updating model defaults across the stack means editing this map only.
+   */
+  tiers: Record<IntelligenceTier, string>;
+  /** Tier used when neither `intelligence` nor `model` is specified. */
+  defaultTier: IntelligenceTier;
   /**
    * Env-var names; at least one must be set (OR semantics) for the adapter to
    * be usable. Empty array means no env requirement (e.g. Claude using

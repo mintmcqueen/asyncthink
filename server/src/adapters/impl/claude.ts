@@ -20,26 +20,39 @@
 import { randomUUID } from 'crypto';
 import type { Adapter, AdapterInvocation, AdapterResult } from '../../core/adapter.js';
 import type { Executor } from '../../core/executor.js';
+import type { IntelligenceTier } from '../../core/manifests.js';
+import { resolveModel } from '../tierResolver.js';
+
+const CLAUDE_TIERS: Record<IntelligenceTier, string> = {
+  high: 'claude-opus-4-7',
+  med: 'claude-sonnet-4-6',
+  low: 'claude-haiku-4-5-20251001',
+};
 
 export class ClaudeAdapter implements Adapter {
   readonly id = 'claude' as const;
   readonly readOnly = true as const;
   readonly resumeStrategy = 'replay' as const;
   private readonly defaultTimeoutMs: number;
-  private readonly defaultModel: string;
+  private readonly tiers: Record<IntelligenceTier, string>;
+  private readonly defaultTier: IntelligenceTier;
 
-  constructor(opts: { defaultTimeoutMs?: number; defaultModel?: string } = {}) {
+  constructor(
+    opts: {
+      defaultTimeoutMs?: number;
+      tiers?: Record<IntelligenceTier, string>;
+      defaultTier?: IntelligenceTier;
+    } = {}
+  ) {
     this.defaultTimeoutMs = opts.defaultTimeoutMs ?? 120_000;
-    this.defaultModel = opts.defaultModel ?? 'claude-sonnet-4-6';
+    this.tiers = opts.tiers ?? CLAUDE_TIERS;
+    this.defaultTier = opts.defaultTier ?? 'med';
   }
 
   async invoke(inv: AdapterInvocation, exec: Executor): Promise<AdapterResult> {
+    const model = resolveModel(inv, this.tiers, this.defaultTier);
     const prompt = renderPrompt(inv);
-    const argv: string[] = ['--print'];
-    if (inv.model || this.defaultModel) {
-      argv.push('--model', inv.model ?? this.defaultModel);
-    }
-    argv.push(prompt);
+    const argv: string[] = ['--print', '--model', model, prompt];
 
     const result = await exec.run({
       bin: 'claude',

@@ -17,10 +17,13 @@ const REQUIRED_FIELDS: (keyof AdapterManifest)[] = [
   'id',
   'displayName',
   'binary',
-  'defaultModel',
+  'tiers',
+  'defaultTier',
   'requiredEnv',
   'defaultTimeoutMs',
 ];
+
+const VALID_TIERS = ['high', 'med', 'low'] as const;
 
 export class FsManifestRegistry implements ManifestRegistry {
   private cache: Map<string, AdapterManifest> | null = null;
@@ -73,6 +76,20 @@ function validate(value: unknown, path: string): AdapterManifest {
   }
   if (typeof obj.defaultTimeoutMs !== 'number' || obj.defaultTimeoutMs <= 0) {
     throw new Error(`Manifest at ${path} has invalid defaultTimeoutMs`);
+  }
+  const tiers = obj.tiers as Record<string, unknown> | undefined;
+  if (!tiers || typeof tiers !== 'object') {
+    throw new Error(`Manifest at ${path} has invalid tiers (must be object)`);
+  }
+  for (const tier of VALID_TIERS) {
+    if (typeof tiers[tier] !== 'string' || (tiers[tier] as string).length === 0) {
+      throw new Error(`Manifest at ${path} missing or invalid tier "${tier}"`);
+    }
+  }
+  if (!VALID_TIERS.includes(obj.defaultTier as (typeof VALID_TIERS)[number])) {
+    throw new Error(
+      `Manifest at ${path} has invalid defaultTier (must be one of ${VALID_TIERS.join(', ')})`
+    );
   }
   return obj as unknown as AdapterManifest;
 }

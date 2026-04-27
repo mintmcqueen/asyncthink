@@ -17,6 +17,7 @@ import { randomUUID } from 'crypto';
 import type { Adapter } from '../core/adapter.js';
 import type { AuditLog } from '../core/auditLog.js';
 import type { Executor } from '../core/executor.js';
+import type { IntelligenceTier } from '../core/manifests.js';
 import type { TaskState, TaskStatus, TaskStore } from '../core/taskStore.js';
 import type { ThreadStore } from '../core/threadStore.js';
 
@@ -30,6 +31,7 @@ export interface ForkRequest {
   adapter: string;
   prompt: string;
   files?: string[];
+  intelligence?: IntelligenceTier;
   model?: string;
   /** Skill id; ignored at council level (resolved by tool layer in Phase 4). */
   skill?: string;
@@ -117,6 +119,7 @@ export class Council {
         {
           prompt: req.prompt,
           files: req.files,
+          intelligence: req.intelligence,
           model: req.model,
         },
         this.executor

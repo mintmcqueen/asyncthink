@@ -62,7 +62,16 @@ export function registerDelegateTools(server: McpServer): void {
           .describe('Close the thread immediately after this turn.'),
         cwd: z.string().optional().describe('Override the working directory.'),
         timeoutMs: z.number().int().min(1_000).optional(),
-        model: z.string().optional().describe('Override the adapter default model.'),
+        intelligence: z
+          .enum(['high', 'med', 'low'])
+          .optional()
+          .describe(
+            'Intelligence tier — preferred over raw model id. Maps to a model via the adapter manifest, so callers stay stable as model names evolve.'
+          ),
+        model: z
+          .string()
+          .optional()
+          .describe('Raw model id override (escape hatch); wins over intelligence.'),
       },
     },
     async (args) => {
@@ -70,6 +79,7 @@ export function registerDelegateTools(server: McpServer): void {
 
       let adapter = args.adapter;
       let prompt = args.prompt;
+      let intelligence = args.intelligence;
       let model = args.model;
       let timeoutMs = args.timeoutMs;
       if (args.skill) {
@@ -77,11 +87,13 @@ export function registerDelegateTools(server: McpServer): void {
           skill: args.skill,
           callerPrompt: args.prompt,
           callerAdapter: args.adapter,
+          callerIntelligence: args.intelligence,
           callerModel: args.model,
           callerTimeoutMs: args.timeoutMs,
         });
         adapter = resolved.adapter as typeof args.adapter;
         prompt = resolved.prompt;
+        intelligence = resolved.intelligence;
         model = resolved.model;
         timeoutMs = resolved.timeoutMs;
       }
@@ -98,6 +110,7 @@ export function registerDelegateTools(server: McpServer): void {
         close: args.close,
         cwd: args.cwd,
         timeoutMs,
+        intelligence,
         model,
       });
       return {

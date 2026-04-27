@@ -12,12 +12,20 @@
 
 import type { Executor } from './executor.js';
 
+import type { IntelligenceTier } from './manifests.js';
+
 export interface AdapterInvocation {
   /** Prompt to send to the subordinate. Adapter encodes file context per its convention. */
   prompt: string;
   /** Absolute paths of files the subordinate may read. */
   files?: string[];
-  /** Adapter-specific model id; falls back to manifest default. */
+  /**
+   * Intelligence tier — selects a model from the adapter's manifest tiers
+   * map. Stable across model-name churn; the manifest is the single source
+   * of truth that maps tier to current model id.
+   */
+  intelligence?: IntelligenceTier;
+  /** Raw model id override; wins over `intelligence` if supplied. Escape hatch. */
   model?: string;
   /** Opaque continuation token from a prior invocation; enables threaded conversation. */
   sessionId?: string;

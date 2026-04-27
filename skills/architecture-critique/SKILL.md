@@ -1,5 +1,6 @@
 ---
 adapter: gemini
+intelligence: high
 description: Independent architectural critique focused on design tradeoffs, abstraction boundaries, and downstream consequences. Use when designing or reviewing system architecture, module structure, or integration patterns.
 files_glob: "{docs,architecture}/**/*.md,CLAUDE.md,*.md"
 timeout_ms: 180000

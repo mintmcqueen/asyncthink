@@ -11,12 +11,19 @@
  * User skills with the same id override built-ins.
  */
 
+import type { IntelligenceTier } from './manifests.js';
+
 export interface Skill {
   /** Stable id used in delegate({skill: "..."}) and asyncthink fork.skill. */
   name: string;
   /** Adapter id that this skill dispatches to. */
   adapter: string;
-  /** Optional adapter-specific model override. */
+  /** Optional intelligence tier; overridden by caller's tier or model. */
+  intelligence?: IntelligenceTier;
+  /**
+   * Optional raw model id override (escape hatch). Prefer `intelligence` so
+   * the skill stays stable across model-name churn.
+   */
   model?: string;
   /** Optional file glob that resolves at invocation time. */
   filesGlob?: string;

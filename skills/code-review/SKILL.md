@@ -1,5 +1,6 @@
 ---
 adapter: codex
+intelligence: high
 description: Adversarial code review focusing on bugs, security issues, and concurrency risks. Use when reviewing code for quality issues or pre-merge sanity checks.
 files_glob: src/**/*.{ts,tsx,js,jsx,py,go,rs,java,kt}
 timeout_ms: 240000

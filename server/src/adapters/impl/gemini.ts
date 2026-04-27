@@ -23,20 +23,37 @@ import { randomUUID } from 'crypto';
 import { dirname } from 'path';
 import type { Adapter, AdapterInvocation, AdapterResult } from '../../core/adapter.js';
 import type { Executor } from '../../core/executor.js';
+import type { IntelligenceTier } from '../../core/manifests.js';
+import { resolveModel } from '../tierResolver.js';
+
+const GEMINI_TIERS: Record<IntelligenceTier, string> = {
+  high: 'gemini-3.1-pro-preview',
+  med: 'gemini-2.5-flash',
+  low: 'gemini-2.5-flash-lite',
+};
 
 export class GeminiAdapter implements Adapter {
   readonly id = 'gemini' as const;
   readonly readOnly = true as const;
   readonly resumeStrategy = 'replay' as const;
   private readonly defaultTimeoutMs: number;
-  private readonly defaultModel: string;
+  private readonly tiers: Record<IntelligenceTier, string>;
+  private readonly defaultTier: IntelligenceTier;
 
-  constructor(opts: { defaultTimeoutMs?: number; defaultModel?: string } = {}) {
+  constructor(
+    opts: {
+      defaultTimeoutMs?: number;
+      tiers?: Record<IntelligenceTier, string>;
+      defaultTier?: IntelligenceTier;
+    } = {}
+  ) {
     this.defaultTimeoutMs = opts.defaultTimeoutMs ?? 60_000;
-    this.defaultModel = opts.defaultModel ?? 'gemini-2.5-flash';
+    this.tiers = opts.tiers ?? GEMINI_TIERS;
+    this.defaultTier = opts.defaultTier ?? 'med';
   }
 
   async invoke(inv: AdapterInvocation, exec: Executor): Promise<AdapterResult> {
+    const model = resolveModel(inv, this.tiers, this.defaultTier);
     const argv: string[] = [
       '-p',
       inv.prompt,
@@ -44,8 +61,13 @@ export class GeminiAdapter implements Adapter {
       'json',
       '--approval-mode',
       'plan',
+      // Modern gemini-cli refuses approval-mode overrides outside "trusted"
+      // folders. We invoke programmatically from arbitrary cwds; --skip-trust
+      // is the documented way to bypass the prompt for headless use. The
+      // sandbox is still --approval-mode plan (read-only).
+      '--skip-trust',
       '-m',
-      inv.model ?? this.defaultModel,
+      model,
     ];
     if (inv.files?.length) {
       const dirs = uniqueDirs(inv.files);

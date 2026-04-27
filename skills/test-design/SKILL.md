@@ -1,5 +1,6 @@
 ---
 adapter: claude
+intelligence: med
 description: Test design and coverage analysis. Identifies missing test cases, weak assertions, and behavior that should be exercised end-to-end. Use when designing tests for new code or auditing test suites.
 files_glob: "{src,server/src}/**/*.{ts,tsx,js,jsx,py},{__tests__,tests,test}/**/*"
 timeout_ms: 240000
