@@ -1,0 +1,22 @@
+{
+  "name": "asyncthink-local",
+  "metadata": {
+    "description": "Local AsyncThink plugin marketplace (single-plugin dev install)."
+  },
+  "owner": {
+    "name": "mintmcqueen"
+  },
+  "plugins": [
+    {
+      "name": "asyncthink",
+      "description": "Sequential thinking with parallel competitor council and threaded delegation to subordinate model CLIs (gemini, codex, claude). Read-only, multi-perspective reasoning support for the central orchestrator.",
+      "category": "productivity",
+      "source": {
+        "source": "url",
+        "url": "https://github.com/mintmcqueen/asyncthink.git",
+        "branch": "develop"
+      },
+      "homepage": "https://github.com/mintmcqueen/asyncthink"
+    }
+  ]
+}

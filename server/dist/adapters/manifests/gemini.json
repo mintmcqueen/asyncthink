@@ -1,0 +1,14 @@
+{
+  "id": "gemini",
+  "displayName": "Gemini CLI",
+  "binary": "gemini",
+  "tiers": {
+    "high": "gemini-3.1-pro-preview",
+    "med": "gemini-2.5-flash",
+    "low": "gemini-2.5-flash-lite"
+  },
+  "defaultTier": "med",
+  "requiredEnv": ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
+  "defaultTimeoutMs": 60000,
+  "description": "Google Gemini CLI in --approval-mode plan (read-only navigation) for fast metacognitive research with native session resume."
+}

@@ -3,7 +3,7 @@
   "description": "Sequential thinking with parallel competitor council and threaded delegation to subordinate model CLIs (gemini, codex, claude). Read-only, multi-perspective reasoning support for the central orchestrator.",
   "version": "2.1.0",
   "author": {
-    "name": "Jake Bloch"
+    "name": "mintmcqueen"
   },
   "homepage": "https://github.com/mintmcqueen/asyncthink",
   "repository": "https://github.com/mintmcqueen/asyncthink",

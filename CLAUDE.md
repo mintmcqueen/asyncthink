@@ -143,6 +143,21 @@ Forks are fire-and-forget: `Council.fork()` registers the in-flight promise and 
 3. Prunes the chain's tasks from `FsTaskStore`.
 4. Returns aggregated results to the tool handler for inclusion in the response.
 
+## Plugin distribution
+
+The repo is its own single-plugin marketplace. `.claude-plugin/marketplace.json` declares one plugin (`asyncthink`) with `source: { source: "url", url: "https://github.com/mintmcqueen/asyncthink.git", branch: "develop" }`. Install path:
+
+```sh
+claude plugin marketplace add /path/to/asyncthink   # registers as a directory marketplace
+claude plugin install asyncthink@asyncthink-local
+```
+
+Claude Code's plugin manager clones the github URL on install (HTTPS, no SSH keys needed) and copies the snapshot into `~/.claude/plugins/cache/asyncthink-local/asyncthink/<sha>/`. The manager does not run `npm install` or build steps, so **`server/dist/` is committed** (collaborative-canvas does the same with its prebuilt `dist/bundle.cjs`). Root-level `/dist/` stays gitignored — only `server/dist/` is tracked.
+
+GitHub default branch is `develop` so plugin installs pull v2 code. Cutting `develop → main` happens at major releases via merge-commit per branch-rotation methodology.
+
+For dev iteration without reinstall, start a session with `claude --plugin-dir /path/to/asyncthink` — the plugin loads directly from the source tree on each restart.
+
 ## Repo layout
 
 ```
