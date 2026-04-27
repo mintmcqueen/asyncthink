@@ -2,7 +2,12 @@
   "id": "claude",
   "displayName": "Claude Code",
   "binary": "claude",
-  "defaultModel": "claude-sonnet-4-6",
+  "tiers": {
+    "high": "claude-opus-4-7",
+    "med": "claude-sonnet-4-6",
+    "low": "claude-haiku-4-5-20251001"
+  },
+  "defaultTier": "med",
   "requiredEnv": [],
   "defaultTimeoutMs": 120000,
   "description": "Claude Code subprocess via 'claude --print' for full-capability research (codebase navigation, web, multi-step investigation). Read-only by virtue of how the adapter invokes it; the subprocess runs without the user's edit permissions in v1."

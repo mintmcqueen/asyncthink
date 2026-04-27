@@ -15,13 +15,44 @@ describe('ClaudeAdapter', () => {
     expect(exec.calls[0].argv).toContain('PING');
   });
 
-  it('passes --model when supplied', async () => {
-    const a = new ClaudeAdapter({ defaultModel: 'claude-default' });
+  it('raw model override wins over default tier', async () => {
+    const a = new ClaudeAdapter();
     const exec = new RecordingExecutor();
     await a.invoke({ prompt: 'p', model: 'claude-override' }, exec);
     const argv = exec.calls[0].argv;
     expect(argv).toContain('--model');
     expect(argv[argv.indexOf('--model') + 1]).toBe('claude-override');
+  });
+
+  it('intelligence tier resolves to the matching model id', async () => {
+    const a = new ClaudeAdapter({
+      tiers: { high: 'claude-h', med: 'claude-m', low: 'claude-l' },
+      defaultTier: 'med',
+    });
+    const exec = new RecordingExecutor([
+      { stdout: '', stderr: '', exitCode: 0, durationMs: 1 },
+      { stdout: '', stderr: '', exitCode: 0, durationMs: 1 },
+      { stdout: '', stderr: '', exitCode: 0, durationMs: 1 },
+    ]);
+    await a.invoke({ prompt: 'p', intelligence: 'high' }, exec);
+    await a.invoke({ prompt: 'p', intelligence: 'low' }, exec);
+    await a.invoke({ prompt: 'p' }, exec); // default = med
+    const modelOf = (i: number) =>
+      exec.calls[i].argv[exec.calls[i].argv.indexOf('--model') + 1];
+    expect(modelOf(0)).toBe('claude-h');
+    expect(modelOf(1)).toBe('claude-l');
+    expect(modelOf(2)).toBe('claude-m');
+  });
+
+  it('raw model wins over intelligence tier', async () => {
+    const a = new ClaudeAdapter({
+      tiers: { high: 'h', med: 'm', low: 'l' },
+      defaultTier: 'med',
+    });
+    const exec = new RecordingExecutor();
+    await a.invoke({ prompt: 'p', intelligence: 'high', model: 'raw-override' }, exec);
+    const argv = exec.calls[0].argv;
+    expect(argv[argv.indexOf('--model') + 1]).toBe('raw-override');
   });
 
   it('prepends a Files header when files are supplied', async () => {
@@ -45,7 +76,10 @@ describe('ClaudeAdapter', () => {
 
 describe('GeminiAdapter', () => {
   it('emits -p, --output-format json, --approval-mode plan, --skip-trust, -m', async () => {
-    const a = new GeminiAdapter({ defaultModel: 'gemini-default' });
+    const a = new GeminiAdapter({
+      tiers: { high: 'gh', med: 'gemini-default', low: 'gl' },
+      defaultTier: 'med',
+    });
     const exec = new RecordingExecutor();
     await a.invoke({ prompt: 'PING' }, exec);
     const argv = exec.calls[0].argv;
@@ -59,6 +93,21 @@ describe('GeminiAdapter', () => {
     expect(argv).toContain('--skip-trust');
     expect(argv).toContain('-m');
     expect(argv[argv.indexOf('-m') + 1]).toBe('gemini-default');
+  });
+
+  it('intelligence tier picks the matching gemini model id', async () => {
+    const a = new GeminiAdapter({
+      tiers: { high: 'gh', med: 'gm', low: 'gl' },
+      defaultTier: 'med',
+    });
+    const exec = new RecordingExecutor([
+      { stdout: '', stderr: '', exitCode: 0, durationMs: 1 },
+      { stdout: '', stderr: '', exitCode: 0, durationMs: 1 },
+    ]);
+    await a.invoke({ prompt: 'p', intelligence: 'high' }, exec);
+    await a.invoke({ prompt: 'p', intelligence: 'low' }, exec);
+    expect(exec.calls[0].argv[exec.calls[0].argv.indexOf('-m') + 1]).toBe('gh');
+    expect(exec.calls[1].argv[exec.calls[1].argv.indexOf('-m') + 1]).toBe('gl');
   });
 
   it('passes unique parent directories via --include-directories', async () => {
@@ -96,7 +145,10 @@ describe('GeminiAdapter', () => {
 
 describe('CodexAdapter', () => {
   it('emits exec subcommand and read-only sandbox flags on first turn', async () => {
-    const a = new CodexAdapter({ defaultModel: 'gpt-default' });
+    const a = new CodexAdapter({
+      tiers: { high: 'gh', med: 'gpt-default', low: 'gl' },
+      defaultTier: 'med',
+    });
     const exec = new RecordingExecutor();
     await a.invoke({ prompt: 'PING', cwd: '/proj' }, exec);
     const argv = exec.calls[0].argv;
@@ -116,6 +168,18 @@ describe('CodexAdapter', () => {
     expect(argv).toContain('--model');
     expect(argv[argv.indexOf('--model') + 1]).toBe('gpt-default');
     expect(argv[argv.length - 1]).toBe('PING');
+  });
+
+  it('intelligence tier picks the matching codex model id', async () => {
+    const a = new CodexAdapter({
+      tiers: { high: 'gpt-h', med: 'gpt-m', low: 'gpt-l' },
+      defaultTier: 'high',
+    });
+    const exec = new RecordingExecutor();
+    await a.invoke({ prompt: 'p' }, exec); // default = high
+    expect(
+      exec.calls[0].argv[exec.calls[0].argv.indexOf('--model') + 1]
+    ).toBe('gpt-h');
   });
 
   it('inserts "resume <sessionId>" after exec when sessionId is provided', async () => {

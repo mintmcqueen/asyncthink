@@ -16,6 +16,7 @@ import { randomUUID } from 'crypto';
 import type { Adapter } from '../core/adapter.js';
 import type { AuditLog } from '../core/auditLog.js';
 import type { Executor } from '../core/executor.js';
+import type { IntelligenceTier } from '../core/manifests.js';
 import type { ThreadStore, ThreadTurn } from '../core/threadStore.js';
 
 export interface DelegateRequest {
@@ -31,7 +32,9 @@ export interface DelegateRequest {
   cwd?: string;
   /** Optional timeout override in ms. */
   timeoutMs?: number;
-  /** Optional per-call model override. */
+  /** Intelligence tier — preferred over raw model id. */
+  intelligence?: IntelligenceTier;
+  /** Raw model id override (escape hatch); wins over `intelligence`. */
   model?: string;
 }
 
@@ -109,6 +112,7 @@ export class Delegate {
         sessionId,
         cwd: req.cwd,
         timeoutMs: req.timeoutMs,
+        intelligence: req.intelligence,
         model: req.model,
       },
       this.executor

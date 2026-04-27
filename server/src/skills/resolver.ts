@@ -11,11 +11,13 @@
  * overridden by the caller.
  */
 
+import type { IntelligenceTier } from '../core/manifests.js';
 import type { Skill, SkillRegistry } from '../core/skillRegistry.js';
 
 export interface ResolvedSkill {
   adapter: string;
   prompt: string;
+  intelligence?: IntelligenceTier;
   model?: string;
   timeoutMs?: number;
   filesGlob?: string;
@@ -26,7 +28,9 @@ export interface SkillResolutionInput {
   callerPrompt: string;
   /** Optional adapter the caller specified; must match the skill's adapter. */
   callerAdapter?: string;
-  /** Caller's model override (wins). */
+  /** Caller's intelligence tier (wins over skill default). */
+  callerIntelligence?: IntelligenceTier;
+  /** Caller's raw model override (wins over everything). */
   callerModel?: string;
   /** Caller's timeout override (wins). */
   callerTimeoutMs?: number;
@@ -61,6 +65,7 @@ export async function resolveSkill(
   return {
     adapter: skill.adapter,
     prompt: composePrompt(skill.promptBody, input.callerPrompt),
+    intelligence: input.callerIntelligence ?? skill.intelligence,
     model: input.callerModel ?? skill.model,
     timeoutMs: input.callerTimeoutMs ?? skill.timeoutMs,
     filesGlob: skill.filesGlob,

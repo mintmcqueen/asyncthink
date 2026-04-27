@@ -2,6 +2,33 @@
 
 All notable changes to AsyncThink are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.0] — 2026-04-26
+
+### Added — intelligence tier abstraction
+
+Models are now selected by tier (`high` / `med` / `low`) rather than raw model id. Adapter manifests own the tier-to-model mapping; callers and skills pin to tiers and stay stable as model names evolve.
+
+- `IntelligenceTier` type (`'high' | 'med' | 'low'`) added to `core/manifests.ts`.
+- `AdapterManifest` now requires a `tiers: { high, med, low }` map and a `defaultTier`. The free-form `defaultModel` field is gone.
+- `AdapterInvocation` accepts `intelligence?: IntelligenceTier`; raw `model?` is preserved as an escape hatch and wins.
+- New `tierResolver` (`server/src/adapters/tierResolver.ts`) with explicit precedence: raw `model` > caller `intelligence` > adapter `defaultTier`.
+- All three adapters refactored to take `tiers` + `defaultTier` constructor opts. Built-in tier maps:
+  - claude: `claude-opus-4-7` / `claude-sonnet-4-6` / `claude-haiku-4-5-20251001`
+  - gemini: `gemini-3.1-pro-preview` / `gemini-2.5-flash` / `gemini-2.5-flash-lite`
+  - codex: `gpt-5.5` / `gpt-5-codex` / `gpt-5-mini`
+- `Skill` interface adds `intelligence?: IntelligenceTier`; frontmatter parser reads `intelligence: high|med|low`.
+- `SkillResolver` threads tier through with caller > skill > adapter precedence.
+- Tool schemas (`delegate`, `asyncthink` fork shape) accept `intelligence: 'high'|'med'|'low'`.
+- `asyncthink_config({action:"list_adapters"})` now returns the full `tiers` map and `defaultTier` per adapter.
+- 3 reference skills migrated to `intelligence:` (code-review/architecture-critique → high; test-design → med).
+- 4 new adapter unit tests covering tier resolution and override precedence.
+- Manifest validator enforces shape: tiers must be `{high, med, low}` strings; defaultTier must be a valid tier.
+- 117 unit + integration tests passing.
+
+### Changed
+- Default codex model bumped from `gpt-5.4` to `gpt-5.5` (now via `tiers.high`).
+- Default gemini model bumped to `gemini-3.1-pro-preview` (`tiers.high`); `med` tier kept at `gemini-2.5-flash`.
+
 ## [2.0.1] — 2026-04-26
 
 ### Fixed

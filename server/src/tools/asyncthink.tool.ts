@@ -58,7 +58,11 @@ export function registerAsyncThinkTool(server: McpServer): void {
                 .describe('Subordinate to dispatch to. Required if skill not supplied.'),
               prompt: z.string().describe('Fork-specific prompt.'),
               files: z.array(z.string()).optional(),
-              model: z.string().optional(),
+              intelligence: z
+                .enum(['high', 'med', 'low'])
+                .optional()
+                .describe('Intelligence tier (preferred over raw model id).'),
+              model: z.string().optional().describe('Raw model id override.'),
               skill: z
                 .string()
                 .optional()
@@ -110,16 +114,19 @@ export function registerAsyncThinkTool(server: McpServer): void {
           try {
             let adapter = f.adapter;
             let prompt = f.prompt;
+            let intelligence = f.intelligence;
             let model = f.model;
             if (f.skill) {
               const resolved = await resolveSkill(getSkillRegistry(), {
                 skill: f.skill,
                 callerPrompt: f.prompt,
                 callerAdapter: f.adapter,
+                callerIntelligence: f.intelligence,
                 callerModel: f.model,
               });
               adapter = resolved.adapter as typeof f.adapter;
               prompt = resolved.prompt;
+              intelligence = resolved.intelligence;
               model = resolved.model;
             }
             if (!adapter) {
@@ -130,6 +137,7 @@ export function registerAsyncThinkTool(server: McpServer): void {
               adapter,
               prompt,
               files: f.files,
+              intelligence,
               model,
               skill: f.skill,
               parentThreadId: chainId,

@@ -68,9 +68,9 @@ Drop a markdown file under `~/.config/asyncthink/skills/<name>.md`:
 ```markdown
 ---
 adapter: codex
+intelligence: high
 description: What this skill is for and when to use it
 files_glob: src/**/*.ts
-model: gpt-5.4
 timeout_ms: 240000
 ---
 
@@ -78,6 +78,8 @@ You are <persona>. Your job is to <task>.
 
 (prompt prefix that orients the subordinate)
 ```
+
+`intelligence` is one of `high`, `med`, `low` — adapters map tiers to current model ids in their manifest, so skills stay stable as model names evolve. Override with a raw `model:` field if you need a specific id.
 
 User skills override plugin-shipped skills with the same id. After editing, run `asyncthink_config({action: "reload_skills"})` to pick up the change.
 

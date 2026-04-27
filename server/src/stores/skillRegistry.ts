@@ -24,11 +24,14 @@ import type { Skill, SkillRegistry } from '../core/skillRegistry.js';
 
 interface RawFrontmatter {
   adapter?: unknown;
+  intelligence?: unknown;
   model?: unknown;
   files_glob?: unknown;
   timeout_ms?: unknown;
   description?: unknown;
 }
+
+const VALID_TIERS = new Set(['high', 'med', 'low']);
 
 export interface FsSkillRegistryOptions {
   pluginSkillsDir?: string;
@@ -134,9 +137,14 @@ async function loadSkillFile(
   if (typeof fm.description !== 'string' || fm.description.length === 0) {
     return undefined;
   }
+  const intelligence =
+    typeof fm.intelligence === 'string' && VALID_TIERS.has(fm.intelligence)
+      ? (fm.intelligence as 'high' | 'med' | 'low')
+      : undefined;
   return {
     name,
     adapter: fm.adapter,
+    intelligence,
     model: typeof fm.model === 'string' ? fm.model : undefined,
     filesGlob: typeof fm.files_glob === 'string' ? fm.files_glob : undefined,
     timeoutMs: typeof fm.timeout_ms === 'number' ? fm.timeout_ms : undefined,

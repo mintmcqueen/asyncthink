@@ -22,7 +22,8 @@ interface AdapterListing {
   binary: string;
   binaryPath?: string;
   binaryAvailable: boolean;
-  defaultModel: string;
+  tiers: Record<'high' | 'med' | 'low', string>;
+  defaultTier: 'high' | 'med' | 'low';
   defaultTimeoutMs: number;
   envOk: boolean;
   envMissing: string[];
@@ -57,7 +58,8 @@ export function registerConfigTool(server: McpServer): void {
               binary: m.binary,
               binaryPath,
               binaryAvailable: !!binaryPath,
-              defaultModel: m.defaultModel,
+              tiers: m.tiers,
+              defaultTier: m.defaultTier,
               defaultTimeoutMs: m.defaultTimeoutMs,
               envOk: envMissing.length === 0,
               envMissing,

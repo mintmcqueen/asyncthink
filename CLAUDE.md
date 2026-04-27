@@ -88,11 +88,28 @@ Skills are markdown-with-frontmatter delegation templates. They bind a specific 
 ---
 adapter: codex                # required
 description: Adversarial code review focusing on bugs and security
+intelligence: high            # optional — high|med|low (preferred over model)
 files_glob: src/**/*.ts       # optional
-model: gpt-5.4                # optional
+model: gpt-5.5                # optional escape hatch — pin a raw model id
 timeout_ms: 240000            # optional
 ---
 ```
+
+**Model selection — intelligence tiers, not raw ids.** Adapters expose three tiers per their manifest:
+
+| Tier | claude | gemini | codex |
+| --- | --- | --- | --- |
+| `high` | claude-opus-4-7 | gemini-3.1-pro-preview | gpt-5.5 |
+| `med` | claude-sonnet-4-6 | gemini-2.5-flash | gpt-5-codex |
+| `low` | claude-haiku-4-5-20251001 | gemini-2.5-flash-lite | gpt-5-mini |
+
+Callers pin to **tiers**, not model ids: `delegate({adapter: "gemini", intelligence: "high", prompt: "..."})`. Skills and tool calls stay stable as model names evolve — only the manifest's `tiers` map needs updating.
+
+Resolution precedence (highest → lowest):
+1. Caller's raw `model` (escape hatch — wins over everything)
+2. Caller's `intelligence` tier
+3. Skill's frontmatter `intelligence`
+4. Adapter's `defaultTier` (currently `med` for all built-ins)
 
 The body of the markdown file is the **prompt prefix** — the system context that orients the subordinate before the caller's per-invocation prompt.
 

@@ -38,17 +38,33 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import type { Adapter, AdapterInvocation, AdapterResult } from '../../core/adapter.js';
 import type { Executor } from '../../core/executor.js';
+import type { IntelligenceTier } from '../../core/manifests.js';
+import { resolveModel } from '../tierResolver.js';
+
+const CODEX_TIERS: Record<IntelligenceTier, string> = {
+  high: 'gpt-5.5',
+  med: 'gpt-5-codex',
+  low: 'gpt-5-mini',
+};
 
 export class CodexAdapter implements Adapter {
   readonly id = 'codex' as const;
   readonly readOnly = true as const;
   readonly resumeStrategy = 'native' as const;
   private readonly defaultTimeoutMs: number;
-  private readonly defaultModel: string;
+  private readonly tiers: Record<IntelligenceTier, string>;
+  private readonly defaultTier: IntelligenceTier;
 
-  constructor(opts: { defaultTimeoutMs?: number; defaultModel?: string } = {}) {
+  constructor(
+    opts: {
+      defaultTimeoutMs?: number;
+      tiers?: Record<IntelligenceTier, string>;
+      defaultTier?: IntelligenceTier;
+    } = {}
+  ) {
     this.defaultTimeoutMs = opts.defaultTimeoutMs ?? 120_000;
-    this.defaultModel = opts.defaultModel ?? 'gpt-5.4';
+    this.tiers = opts.tiers ?? CODEX_TIERS;
+    this.defaultTier = opts.defaultTier ?? 'med';
   }
 
   async invoke(inv: AdapterInvocation, exec: Executor): Promise<AdapterResult> {
@@ -62,6 +78,7 @@ export class CodexAdapter implements Adapter {
     if (inv.sessionId) {
       argv.push('resume', inv.sessionId);
     }
+    const model = resolveModel(inv, this.tiers, this.defaultTier);
     argv.push(
       '--sandbox',
       'read-only',
@@ -72,7 +89,7 @@ export class CodexAdapter implements Adapter {
       '--output-last-message',
       tmp,
       '--model',
-      inv.model ?? this.defaultModel,
+      model,
       '--cd',
       inv.cwd ?? process.cwd(),
       prompt
