@@ -27,3 +27,9 @@ export declare function getThinking(): AsyncThinkingServer;
 export declare function getSkillRegistry(): FsSkillRegistry;
 export declare function getAuditLog(): JsonlAuditLog;
 export declare function getManifestRegistry(): FsManifestRegistry;
+/**
+ * Cross-registry validation: surface skill ↔ adapter conflicts as stderr
+ * warnings so operators see misconfigured skills before any caller hits
+ * the runtime error. Best-effort; never throws.
+ */
+export declare function validateRegistries(): Promise<void>;

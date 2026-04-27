@@ -62,7 +62,7 @@ export class CodexAdapter implements Adapter {
       defaultTier?: IntelligenceTier;
     } = {}
   ) {
-    this.defaultTimeoutMs = opts.defaultTimeoutMs ?? 120_000;
+    this.defaultTimeoutMs = opts.defaultTimeoutMs ?? 180_000;
     this.tiers = opts.tiers ?? CODEX_TIERS;
     this.defaultTier = opts.defaultTier ?? 'med';
   }

@@ -57,3 +57,23 @@ export function getAuditLog() {
 export function getManifestRegistry() {
     return manifestRegistry;
 }
+/**
+ * Cross-registry validation: surface skill ↔ adapter conflicts as stderr
+ * warnings so operators see misconfigured skills before any caller hits
+ * the runtime error. Best-effort; never throws.
+ */
+export async function validateRegistries() {
+    const { findSkillConflicts, formatSkillConflict } = await import('./skills/conflictValidator.js');
+    try {
+        const [skills, manifests] = await Promise.all([
+            skillRegistry.list(),
+            manifestRegistry.loadAll(),
+        ]);
+        for (const issue of findSkillConflicts(skills, manifests)) {
+            console.error(formatSkillConflict(issue));
+        }
+    }
+    catch (err) {
+        console.error(`[AsyncThink] Skill validation failed (non-fatal): ${err.message}`);
+    }
+}

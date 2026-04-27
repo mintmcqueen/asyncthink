@@ -10,11 +10,45 @@
  * adapter currently advertise as high/med/low". Updating defaults across
  * the stack means editing one JSON file (the manifest) per adapter. Callers
  * pin to tiers, not to model names that age out.
+ *
+ * Conflict detection (F1): if the caller supplies BOTH `inv.intelligence`
+ * AND `inv.model`, and the model id at that tier in the adapter's manifest
+ * does NOT equal `inv.model`, this is a configuration mistake — the caller
+ * has expressed contradictory intent (e.g. `{intelligence: 'low', model:
+ * 'claude-opus-4-7'}` says "be cheap" and "use the expensive model" at
+ * once). We throw with both inputs and the resolved tier→model so the
+ * caller can drop one or align them. If both are supplied and they agree,
+ * the call is allowed.
  */
 export const DEFAULT_TIERS = ['high', 'med', 'low'];
+export class TierModelConflictError extends Error {
+    intelligence;
+    model;
+    tierModel;
+    tiers;
+    constructor(intelligence, model, tierModel, tiers) {
+        super(`Conflicting model selection: intelligence="${intelligence}" maps to "${tierModel}" but model="${model}" was also supplied. ` +
+            `Drop one of the inputs, or pass model="${tierModel}" to confirm. Tiers: ${JSON.stringify(tiers)}`);
+        this.intelligence = intelligence;
+        this.model = model;
+        this.tierModel = tierModel;
+        this.tiers = tiers;
+        this.name = 'TierModelConflictError';
+    }
+}
 export function resolveModel(inv, tiers, defaultTier) {
+    // Both supplied — error if they disagree, allow if they match.
+    if (inv.model && inv.model.length > 0 && inv.intelligence) {
+        const tierModel = tiers[inv.intelligence];
+        if (tierModel !== inv.model) {
+            throw new TierModelConflictError(inv.intelligence, inv.model, tierModel, tiers);
+        }
+        return inv.model;
+    }
+    // Raw model only — escape hatch.
     if (inv.model && inv.model.length > 0)
         return inv.model;
+    // Tier (caller-supplied or adapter default).
     const tier = inv.intelligence ?? defaultTier;
     const id = tiers[tier];
     if (!id || id.length === 0) {

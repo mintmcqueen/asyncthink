@@ -99,9 +99,13 @@ timeout_ms: 240000            # optional
 
 | Tier | claude | gemini | codex |
 | --- | --- | --- | --- |
-| `high` | claude-opus-4-7 | gemini-3.1-pro-preview | gpt-5.5 |
-| `med` | claude-sonnet-4-6 | gemini-2.5-flash | gpt-5-codex |
+| `high` | claude-sonnet-4-6 † | gemini-3.1-pro-preview | gpt-5.5 |
+| `med` | claude-sonnet-4-6 † | gemini-2.5-flash | gpt-5-codex |
 | `low` | claude-haiku-4-5-20251001 | gemini-2.5-flash-lite | gpt-5-mini |
+
+† Anthropic's 30k input-tokens/minute org cap on `claude-opus-4-7` makes opus unreliable for non-trivial council forks (v2.1.1 finding). Claude's `high` and `med` both map to sonnet-4-6 until R6a (tier-model rework in v2.2) revisits. Users with higher rate limits can pin the raw model id via `model: "claude-opus-4-7"` on the call or edit `server/src/adapters/manifests/claude.json`.
+
+**Conflict detection (v2.1.1, F1):** if a caller or skill supplies BOTH `intelligence` AND `model` AND they resolve to different ids, the adapter throws `TierModelConflictError` rather than silently honoring the raw `model`. Skill frontmatter that pins both fields with conflicting values is reported as a stderr warning at startup via the `conflictValidator`.
 
 Callers pin to **tiers**, not model ids: `delegate({adapter: "gemini", intelligence: "high", prompt: "..."})`. Skills and tool calls stay stable as model names evolve — only the manifest's `tiers` map needs updating.
 

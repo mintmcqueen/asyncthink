@@ -1,6 +1,6 @@
 {
   "name": "asyncthink",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "description": "MCP server: sequential thinking + parallel competitor council + threaded delegation to subordinate model CLIs (read-only)",
   "license": "MIT",
   "type": "module",
