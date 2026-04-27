@@ -9,6 +9,6 @@
   },
   "defaultTier": "med",
   "requiredEnv": ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
-  "defaultTimeoutMs": 60000,
+  "defaultTimeoutMs": 180000,
   "description": "Google Gemini CLI in --approval-mode plan (read-only navigation) for fast metacognitive research with native session resume."
 }

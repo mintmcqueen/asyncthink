@@ -44,15 +44,43 @@ describe('ClaudeAdapter', () => {
     expect(modelOf(2)).toBe('claude-m');
   });
 
-  it('raw model wins over intelligence tier', async () => {
+  it('raw model wins over intelligence tier when they agree (no conflict)', async () => {
     const a = new ClaudeAdapter({
       tiers: { high: 'h', med: 'm', low: 'l' },
       defaultTier: 'med',
     });
     const exec = new RecordingExecutor();
-    await a.invoke({ prompt: 'p', intelligence: 'high', model: 'raw-override' }, exec);
+    // intelligence: 'high' resolves to 'h' which equals model='h' — same id, allowed.
+    await a.invoke({ prompt: 'p', intelligence: 'high', model: 'h' }, exec);
     const argv = exec.calls[0].argv;
-    expect(argv[argv.indexOf('--model') + 1]).toBe('raw-override');
+    expect(argv[argv.indexOf('--model') + 1]).toBe('h');
+  });
+
+  it('throws TierModelConflictError when intelligence and model disagree (F1)', async () => {
+    const a = new ClaudeAdapter({
+      tiers: { high: 'h', med: 'm', low: 'l' },
+      defaultTier: 'med',
+    });
+    const exec = new RecordingExecutor();
+    await expect(
+      a.invoke({ prompt: 'p', intelligence: 'low', model: 'h' }, exec)
+    ).rejects.toThrow(/Conflicting model selection.*intelligence="low".*model="h"/);
+  });
+
+  it('error message names the resolved tier model so caller can fix it', async () => {
+    const a = new ClaudeAdapter({
+      tiers: { high: 'opus', med: 'sonnet', low: 'haiku' },
+      defaultTier: 'med',
+    });
+    const exec = new RecordingExecutor();
+    let err: Error | undefined;
+    try {
+      await a.invoke({ prompt: 'p', intelligence: 'low', model: 'opus' }, exec);
+    } catch (e) {
+      err = e as Error;
+    }
+    expect(err?.message).toContain('"haiku"');
+    expect(err?.message).toContain('"opus"');
   });
 
   it('prepends a Files header when files are supplied', async () => {
@@ -140,6 +168,58 @@ describe('GeminiAdapter', () => {
     ]);
     const out = await a.invoke({ prompt: 'PING' }, exec);
     expect(out.text).toBe('PONG');
+  });
+
+  it('extracts response field even when stdout is preceded by noise (F2)', async () => {
+    const a = new GeminiAdapter();
+    const noisyStdout =
+      'MCP issues detected. Run /mcp list for status.' + JSON.stringify({ response: 'PONG' });
+    const exec = new RecordingExecutor([
+      { stdout: noisyStdout, stderr: '', exitCode: 0, durationMs: 1 },
+    ]);
+    const out = await a.invoke({ prompt: 'PING' }, exec);
+    expect(out.text).toBe('PONG');
+  });
+
+  it('returns empty when stdout is operational noise without JSON (F2)', async () => {
+    const a = new GeminiAdapter();
+    const exec = new RecordingExecutor([
+      {
+        stdout: 'MCP issues detected. Run /mcp list for status.',
+        stderr: '',
+        exitCode: 0,
+        durationMs: 1,
+      },
+    ]);
+    const out = await a.invoke({ prompt: 'PING' }, exec);
+    expect(out.text).toBe('');
+  });
+
+  it('handles JSON with nested braces and escaped strings (F2)', async () => {
+    const a = new GeminiAdapter();
+    const payload = JSON.stringify({
+      response: 'inner has } and {nested}',
+      stats: { models: { 'g-pro': { latencyMs: 100 } } },
+    });
+    const exec = new RecordingExecutor([
+      { stdout: 'noise prefix...' + payload, stderr: '', exitCode: 0, durationMs: 1 },
+    ]);
+    const out = await a.invoke({ prompt: 'PING' }, exec);
+    expect(out.text).toBe('inner has } and {nested}');
+  });
+
+  it('surfaces gemini error.message as structured error string (F2)', async () => {
+    const a = new GeminiAdapter();
+    const exec = new RecordingExecutor([
+      {
+        stdout: JSON.stringify({ error: { message: 'API quota exceeded' } }),
+        stderr: '',
+        exitCode: 0,
+        durationMs: 1,
+      },
+    ]);
+    const out = await a.invoke({ prompt: 'PING' }, exec);
+    expect(out.text).toBe('[gemini error] API quota exceeded');
   });
 });
 

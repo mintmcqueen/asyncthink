@@ -34,7 +34,7 @@ export class GeminiAdapter {
     tiers;
     defaultTier;
     constructor(opts = {}) {
-        this.defaultTimeoutMs = opts.defaultTimeoutMs ?? 60_000;
+        this.defaultTimeoutMs = opts.defaultTimeoutMs ?? 180_000;
         this.tiers = opts.tiers ?? GEMINI_TIERS;
         this.defaultTier = opts.defaultTier ?? 'med';
     }
@@ -82,18 +82,77 @@ function uniqueDirs(files) {
         set.add(dirname(f));
     return [...set].sort();
 }
+/**
+ * Parse gemini-cli's --output-format=json output.
+ *
+ * Modern gemini-cli prepends operational noise to stdout in some
+ * configurations — most commonly "MCP issues detected. Run /mcp list for
+ * status." when the user has gemini's own MCP servers configured but
+ * misbehaving. This noise can sit BEFORE the actual JSON object.
+ *
+ * Strategy: locate the first top-level JSON object in the output and parse
+ * just that. If that succeeds and yields a `response` field, use it. If the
+ * payload yields an `error.message`, surface a structured error string.
+ * If we can't find any JSON, return an empty string (NOT the raw stdout —
+ * returning the noise as the answer is the bug F2 fixes).
+ *
+ * The raw stdout/stderr are still returned in AdapterResult.raw so callers
+ * who need to debug can see what actually came out.
+ */
 function parseGeminiJson(stdout) {
     if (!stdout.trim())
         return '';
+    const jsonStart = stdout.indexOf('{');
+    if (jsonStart < 0)
+        return '';
+    // Scan for the matching closing brace. Gemini's JSON output is a single
+    // top-level object; we need to handle string escapes correctly.
+    const braceEnd = findMatchingBrace(stdout, jsonStart);
+    if (braceEnd < 0)
+        return '';
+    const candidate = stdout.slice(jsonStart, braceEnd + 1);
     try {
-        const obj = JSON.parse(stdout);
-        if (obj.response)
+        const obj = JSON.parse(candidate);
+        if (typeof obj.response === 'string' && obj.response.length > 0) {
             return obj.response;
-        if (obj.error?.message)
+        }
+        if (obj.error && typeof obj.error.message === 'string') {
             return `[gemini error] ${obj.error.message}`;
+        }
+        // JSON parsed but had neither field — surface empty rather than the
+        // surrounding noise.
+        return '';
     }
     catch {
-        // Output wasn't a single JSON object (e.g., stream-json or text fallback).
+        return '';
     }
-    return stdout;
+}
+function findMatchingBrace(s, openAt) {
+    let depth = 0;
+    let inStr = false;
+    let escape = false;
+    for (let i = openAt; i < s.length; i++) {
+        const c = s[i];
+        if (escape) {
+            escape = false;
+            continue;
+        }
+        if (inStr) {
+            if (c === '\\')
+                escape = true;
+            else if (c === '"')
+                inStr = false;
+            continue;
+        }
+        if (c === '"')
+            inStr = true;
+        else if (c === '{')
+            depth++;
+        else if (c === '}') {
+            depth--;
+            if (depth === 0)
+                return i;
+        }
+    }
+    return -1;
 }

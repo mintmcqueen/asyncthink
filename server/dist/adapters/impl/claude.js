@@ -18,8 +18,14 @@
  */
 import { randomUUID } from 'crypto';
 import { resolveModel } from '../tierResolver.js';
+// v2.1.1 note: `high` was claude-opus-4-7 but Anthropic's org-level cap of
+// 30k input tokens/minute on opus-4-7 makes it unreliable for non-trivial
+// council forks. Demoted to sonnet-4-6 so `intelligence: "high"` Just
+// Works. Users with higher opus rate limits can pin the raw model id via
+// `model: "claude-opus-4-7"` or edit this manifest. R6a (tier-model
+// rework) will revisit; until then, high and med collapse to sonnet.
 const CLAUDE_TIERS = {
-    high: 'claude-opus-4-7',
+    high: 'claude-sonnet-4-6',
     med: 'claude-sonnet-4-6',
     low: 'claude-haiku-4-5-20251001',
 };
@@ -31,7 +37,7 @@ export class ClaudeAdapter {
     tiers;
     defaultTier;
     constructor(opts = {}) {
-        this.defaultTimeoutMs = opts.defaultTimeoutMs ?? 120_000;
+        this.defaultTimeoutMs = opts.defaultTimeoutMs ?? 300_000;
         this.tiers = opts.tiers ?? CLAUDE_TIERS;
         this.defaultTier = opts.defaultTier ?? 'med';
     }

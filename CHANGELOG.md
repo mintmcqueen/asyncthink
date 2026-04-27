@@ -10,6 +10,22 @@ All notable changes to AsyncThink are documented here. The format follows [Keep 
 - Set plugin and marketplace author to `mintmcqueen`.
 - GitHub default branch set to `develop` so plugin installs pull v2 code by default.
 
+## [2.1.1] — 2026-04-26
+
+Fix-pack from real-use of v2.1.0. No new features; four bugs surfaced during real council/delegate testing, fixed in parallel with the v2.2 background-jobs research kickoff.
+
+### Fixed
+- **F1: tier/model conflict-detect.** When a caller (or skill frontmatter) supplies BOTH `intelligence` and `model` AND they resolve to different model ids, the system now throws `TierModelConflictError` instead of silently using `model`. Same-id is still allowed. This catches the silent cost-overrun foot-gun gemini's earlier critique flagged: e.g., `{intelligence: "low", model: "claude-opus-4-7"}` is now rejected. New cross-registry validator at `server/src/skills/conflictValidator.ts` runs at startup and surfaces conflicting skills as stderr warnings before any caller hits them.
+- **F2: gemini parser stderr-leak.** Modern `gemini-cli` prepends operational noise to stdout (e.g. "MCP issues detected. Run /mcp list for status.") that collides with the JSON output. The adapter now locates the first valid JSON object via brace-matching (handles nested braces and escaped strings) and extracts `response`/`error.message` fields cleanly. Returns empty when no JSON is present rather than echoing the noise as the response.
+- **F3: claude tier remap.** Anthropic's org-level cap of 30k input tokens/minute on `claude-opus-4-7` makes opus unreliable for non-trivial council forks. Demoted: `high` and `med` both map to `claude-sonnet-4-6` (high/med collapse temporarily); `low` stays at `claude-haiku-4-5-20251001`. Users with higher rate limits can pin the raw `model: "claude-opus-4-7"` or edit `server/src/adapters/manifests/claude.json`. R6a (tier-model rework) in the v2.2 research plan will revisit the abstraction more thoroughly.
+- **F4: default timeout bump.** Sonnet doing real codebase analysis was getting SIGTERM at the 120s default. Bumped: claude → 300s, gemini → 180s (was 60s), codex → 180s (was 120s). Captured in both manifest JSONs and adapter-impl fallbacks.
+
+### Tests
+- 4 new tier-resolution tests (conflict throws; same-id allowed; error message clarity).
+- 4 new gemini-parser tests (noisy-prefix JSON; no-JSON noise; nested braces + escapes; structured error surface).
+- 5 new validator tests (no-conflict cases; flagged conflict shape; unknown-adapter skip; error formatting).
+- 128 unit + integration tests passing in CI mode (was 113); live PONG green for claude (11.8s) and gemini (18.7s).
+
 ## [2.1.0] — 2026-04-26
 
 ### Added — intelligence tier abstraction
