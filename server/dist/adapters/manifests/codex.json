@@ -1,0 +1,14 @@
+{
+  "id": "codex",
+  "displayName": "Codex CLI",
+  "binary": "codex",
+  "tiers": {
+    "high": "gpt-5.5",
+    "med": "gpt-5-codex",
+    "low": "gpt-5-mini"
+  },
+  "defaultTier": "med",
+  "requiredEnv": ["OPENAI_API_KEY"],
+  "defaultTimeoutMs": 120000,
+  "description": "OpenAI Codex CLI via 'codex exec --sandbox read-only' for code-aware research with native session resume."
+}

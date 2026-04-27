@@ -2,6 +2,14 @@
 
 All notable changes to AsyncThink are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Packaging
+- Add `.claude-plugin/marketplace.json` so the repo serves as a single-plugin marketplace; install via `claude plugin marketplace add <path>` + `claude plugin install asyncthink@asyncthink-local`.
+- Commit `server/dist/` for plugin distribution (Claude Code's plugin manager does not run `npm install`). `.gitignore` updated so root `/dist/` stays ignored but `server/dist/` is tracked.
+- Set plugin and marketplace author to `mintmcqueen`.
+- GitHub default branch set to `develop` so plugin installs pull v2 code by default.
+
 ## [2.1.0] — 2026-04-26
 
 ### Added — intelligence tier abstraction
