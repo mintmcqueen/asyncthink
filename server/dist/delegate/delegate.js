@@ -159,6 +159,9 @@ export class Delegate {
             credentials: req.credentials,
             threadId: req.threadId,
             skill: req.skill,
+            // v2.3 (F3-D.2, R-DIAG-D.4) — forward additive allowlist + preflight opt-in.
+            ...(req.mcpServers !== undefined && { mcpServers: req.mcpServers }),
+            ...(req.preflight !== undefined && { preflight: req.preflight }),
         });
         return {
             taskId: state.taskId,

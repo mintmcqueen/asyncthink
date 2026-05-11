@@ -10,6 +10,9 @@
 import { promises as fs } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import { authPathsFor } from './authPath.js';
+const RATE_LIMIT_CLASSES = ['standard', 'rate-limited', 'unlimited'];
+const CAP_DIMS = ['input', 'output', 'requests', 'messages'];
 const REQUIRED_FIELDS = [
     'id',
     'displayName',
@@ -110,9 +113,73 @@ function validate(value, path) {
                 (typeof e.expectedLatencyMsP50 !== 'number' || e.expectedLatencyMsP50 < 0)) {
                 throw new Error(`Manifest at ${path} tierLimits["${tier}"].expectedLatencyMsP50 must be a non-negative number`);
             }
+            // v2.3 — rateLimit.byAuthPath validation (R6a-D.4).
+            if (e.rateLimit !== undefined) {
+                validateRateLimit(e.rateLimit, path, tier, obj.id);
+            }
+        }
+    }
+    // v2.3 — mcp.allowlist / mcp.catalog (F3-D.2).
+    if (obj.mcp !== undefined) {
+        if (typeof obj.mcp !== 'object' || obj.mcp === null) {
+            throw new Error(`Manifest at ${path} mcp must be an object`);
+        }
+        const m = obj.mcp;
+        if (!Array.isArray(m.allowlist) || !m.allowlist.every((s) => typeof s === 'string')) {
+            throw new Error(`Manifest at ${path} mcp.allowlist must be string[]`);
+        }
+        if (m.catalog !== undefined &&
+            (!Array.isArray(m.catalog) || !m.catalog.every((s) => typeof s === 'string'))) {
+            throw new Error(`Manifest at ${path} mcp.catalog must be string[] if present`);
         }
     }
     return obj;
+}
+function validateRateLimit(rl, path, tier, adapterId) {
+    if (typeof rl !== 'object' || rl === null) {
+        throw new Error(`Manifest at ${path} tierLimits["${tier}"].rateLimit must be object`);
+    }
+    const r = rl;
+    if (typeof r.lastVerified !== 'string' ||
+        !/^\d{4}-\d{2}-\d{2}/.test(r.lastVerified)) {
+        throw new Error(`Manifest at ${path} tierLimits["${tier}"].rateLimit.lastVerified must be ISODate string`);
+    }
+    if (typeof r.byAuthPath !== 'object' || r.byAuthPath === null) {
+        throw new Error(`Manifest at ${path} tierLimits["${tier}"].rateLimit.byAuthPath must be object`);
+    }
+    const ap = r.byAuthPath;
+    const validPaths = new Set(authPathsFor(adapterId));
+    for (const key of Object.keys(ap)) {
+        if (!validPaths.has(key)) {
+            throw new Error(`Manifest at ${path} tierLimits["${tier}"].rateLimit.byAuthPath key "${key}" not valid for adapter "${adapterId}". Valid: ${[...validPaths].join(', ')}`);
+        }
+        const advisory = ap[key];
+        if (typeof advisory !== 'object' || advisory === null) {
+            throw new Error(`Manifest at ${path} tierLimits["${tier}"].rateLimit.byAuthPath["${key}"] must be object`);
+        }
+        const a = advisory;
+        if (!RATE_LIMIT_CLASSES.includes(a.class)) {
+            throw new Error(`Manifest at ${path} tierLimits["${tier}"].rateLimit.byAuthPath["${key}"].class must be one of ${RATE_LIMIT_CLASSES.join(',')}`);
+        }
+        if (a.cap !== undefined) {
+            const c = a.cap;
+            if (typeof c.tokens !== 'number' || c.tokens <= 0) {
+                throw new Error(`...cap.tokens must be positive number (${path} tier=${tier} path=${key})`);
+            }
+            if (typeof c.windowSec !== 'number' || c.windowSec <= 0) {
+                throw new Error(`...cap.windowSec must be positive number (${path} tier=${tier} path=${key})`);
+            }
+            if (!CAP_DIMS.includes(c.dim)) {
+                throw new Error(`...cap.dim must be one of ${CAP_DIMS.join(',')} (${path} tier=${tier} path=${key})`);
+            }
+        }
+    }
+    if (typeof r.default !== 'string' || !validPaths.has(r.default)) {
+        throw new Error(`Manifest at ${path} tierLimits["${tier}"].rateLimit.default "${String(r.default)}" not in byAuthPath keys`);
+    }
+    if (!(r.default in ap)) {
+        throw new Error(`Manifest at ${path} tierLimits["${tier}"].rateLimit.default "${String(r.default)}" must appear in byAuthPath`);
+    }
 }
 function defaultManifestsDir() {
     const here = dirname(fileURLToPath(import.meta.url));

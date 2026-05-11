@@ -121,20 +121,10 @@ export class CredentialsNotSupportedError extends Error {
   }
 }
 
-export class ContextLimitExceededError extends Error {
-  constructor(
-    public readonly approxTokens: number,
-    public readonly maxTokens: number,
-    public readonly tier: IntelligenceTier,
-    public readonly adapter: string
-  ) {
-    super(
-      `Estimated context (${approxTokens} tokens) exceeds adapter "${adapter}" tier "${tier}" max ` +
-        `(${maxTokens} tokens). Switch to a higher tier or shorten the prompt.`
-    );
-    this.name = 'ContextLimitExceededError';
-  }
-}
+// v2.3 — ContextLimitExceededError is now a subclass of AdapterError (R-DIAG-D.6).
+// Re-exported here so existing imports keep working; new code should import from
+// '../core/adapterError.js' directly.
+export { ContextLimitExceededError } from './adapterError.js';
 
 export interface AdapterLookup {
   get(id: string): Adapter | undefined;

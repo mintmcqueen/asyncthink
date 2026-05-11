@@ -9,9 +9,73 @@
   },
   "defaultTier": "med",
   "tierLimits": {
-    "high": { "maxContext": 400000, "rateLimitClass": "standard", "expectedLatencyMsP50": 15000 },
-    "med": { "maxContext": 400000, "rateLimitClass": "standard", "expectedLatencyMsP50": 9000 },
-    "low": { "maxContext": 128000, "rateLimitClass": "standard", "expectedLatencyMsP50": 4000 }
+    "high": {
+      "maxContext": 400000,
+      "rateLimitClass": "standard",
+      "rateLimit": {
+        "default": "subscription",
+        "lastVerified": "2026-04-29",
+        "byAuthPath": {
+          "subscription": {
+            "class": "standard",
+            "notes": "ChatGPT Plus/Pro 5-hour message bucket; messages-per-window not tokens-per-minute."
+          },
+          "api": {
+            "class": "standard",
+            "cap": { "tokens": 500000, "windowSec": 60, "dim": "input" },
+            "evidenceUrl": "https://platform.openai.com/docs/guides/rate-limits",
+            "notes": "OpenAI API Tier-1 ITPM on gpt-5.5."
+          },
+          "azure": {
+            "class": "standard",
+            "notes": "Azure OpenAI quotas per deployment; configure in Azure portal."
+          }
+        }
+      },
+      "expectedLatencyMsP50": 15000
+    },
+    "med": {
+      "maxContext": 400000,
+      "rateLimitClass": "standard",
+      "rateLimit": {
+        "default": "subscription",
+        "lastVerified": "2026-04-29",
+        "byAuthPath": {
+          "subscription": { "class": "standard", "notes": "ChatGPT Plus/Pro 5-hour message bucket." },
+          "api": {
+            "class": "standard",
+            "cap": { "tokens": 500000, "windowSec": 60, "dim": "input" },
+            "evidenceUrl": "https://platform.openai.com/docs/guides/rate-limits",
+            "notes": "OpenAI API Tier-1 ITPM on gpt-5 family (shared pool)."
+          },
+          "azure": { "class": "standard", "notes": "Azure OpenAI quotas per deployment." }
+        }
+      },
+      "expectedLatencyMsP50": 9000
+    },
+    "low": {
+      "maxContext": 128000,
+      "rateLimitClass": "standard",
+      "rateLimit": {
+        "default": "subscription",
+        "lastVerified": "2026-04-29",
+        "byAuthPath": {
+          "subscription": { "class": "standard", "notes": "ChatGPT Plus/Pro 5-hour message bucket." },
+          "api": {
+            "class": "standard",
+            "cap": { "tokens": 500000, "windowSec": 60, "dim": "input" },
+            "evidenceUrl": "https://platform.openai.com/docs/guides/rate-limits",
+            "notes": "OpenAI API Tier-1 ITPM on gpt-5-mini."
+          },
+          "azure": { "class": "standard", "notes": "Azure OpenAI quotas per deployment." }
+        }
+      },
+      "expectedLatencyMsP50": 4000
+    }
+  },
+  "mcp": {
+    "allowlist": ["sequentialthinking", "context7"],
+    "catalog": ["sequentialthinking", "context7", "repo-rag"]
   },
   "requiredEnv": ["OPENAI_API_KEY"],
   "defaultTimeoutMs": 180000,

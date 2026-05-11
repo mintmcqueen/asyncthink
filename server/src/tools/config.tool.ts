@@ -23,6 +23,7 @@ import {
   getTaskExecutor,
 } from '../app.js';
 import { TaskNotFoundError } from '../core/taskExecutor.js';
+import { detectAuthPath, type AdapterId } from '../adapters/authPath.js';
 
 interface AdapterListing {
   id: string;
@@ -37,6 +38,12 @@ interface AdapterListing {
   envMissing: string[];
   description?: string;
   tierLimits?: unknown;
+  mcp?: unknown;
+  /** v2.3 — detected auth-path based on current env (R6a-D.4). */
+  authPath?: string;
+  /** v2.3 — when verify:true was passed: result of local probe (R-DIAG-D.3). */
+  authVerified?: true | false | 'env-present-not-validated' | 'not-checked';
+  authVerifiedDetail?: string;
 }
 
 export function registerConfigTool(server: McpServer): void {
@@ -69,6 +76,12 @@ export function registerConfigTool(server: McpServer): void {
           .max(200)
           .optional()
           .describe('Page size (list_tasks only; default 50).'),
+        verify: z
+          .boolean()
+          .optional()
+          .describe(
+            'v2.3 — when true, list_adapters runs cheap local auth probes (R-DIAG-D.3). Defaults to false.'
+          ),
       },
     },
     async (args) => {
@@ -77,9 +90,24 @@ export function registerConfigTool(server: McpServer): void {
       switch (action) {
         case 'list_adapters': {
           const manifests = await getManifestRegistry().loadAll();
+          // v2.3 — emit lastVerified staleness warnings to stderr (R6a-D.7).
+          warnStaleAdvisories(manifests);
+          const verify = args.verify === true;
           const adapters: AdapterListing[] = manifests.map((m) => {
             const binaryPath = whichSync(m.binary);
             const envMissing = adapterEnvMissing(m.requiredEnv);
+            let authPath: string | undefined;
+            let authVerified: AdapterListing['authVerified'] = 'not-checked';
+            let authVerifiedDetail: string | undefined;
+            // v2.3 — auth-path detection (R6a-D.4 supporting).
+            if (['claude', 'gemini', 'codex'].includes(m.id)) {
+              authPath = detectAuthPath(m.id as AdapterId);
+              if (verify) {
+                const probe = probeAuth(m.id as AdapterId);
+                authVerified = probe.verified;
+                authVerifiedDetail = probe.detail;
+              }
+            }
             return {
               id: m.id,
               displayName: m.displayName,
@@ -93,6 +121,10 @@ export function registerConfigTool(server: McpServer): void {
               envMissing,
               description: m.description,
               tierLimits: m.tierLimits,
+              mcp: m.mcp,
+              authPath,
+              authVerified,
+              ...(authVerifiedDetail !== undefined && { authVerifiedDetail }),
             };
           });
           payload = { adapters };
@@ -197,4 +229,78 @@ function whichSync(bin: string): string | undefined {
     }
   }
   return undefined;
+}
+
+/**
+ * v2.3 (R6a-D.7) — emit stderr warnings for cells whose `rateLimit.lastVerified`
+ * is older than 90 days. Doesn't block; nudges the maintainer to recheck the
+ * provider's published caps.
+ */
+function warnStaleAdvisories(manifests: import('../core/manifests.js').AdapterManifest[]): void {
+  const cutoff = Date.now() - 90 * 24 * 60 * 60_000;
+  for (const m of manifests) {
+    if (!m.tierLimits) continue;
+    for (const [tier, limits] of Object.entries(m.tierLimits)) {
+      const rl = limits?.rateLimit;
+      if (!rl?.lastVerified) continue;
+      const ts = new Date(rl.lastVerified).getTime();
+      if (Number.isFinite(ts) && ts < cutoff) {
+        const evid = rl.byAuthPath[rl.default]?.evidenceUrl ?? '(no evidenceUrl on default path)';
+        console.error(
+          `[Adapter:${m.id}] WARNING: rate-limit advisory for tier "${tier}" last verified ${rl.lastVerified} (>90 days). Recheck ${evid}.`
+        );
+      }
+    }
+  }
+}
+
+/**
+ * v2.3 (R-DIAG-D.3) — cheap local auth probe. Never makes paid API calls.
+ *
+ * Claude/codex have no offline auth-status command in v0.39/v0.125 that we
+ * can rely on without paying; for v2.3 we keep this passive (env+binary).
+ * The opt-in `verify: true` flag toggles whether we report 'env-present-not-validated'
+ * vs 'not-checked'.
+ */
+function probeAuth(adapter: AdapterId): {
+  verified: AdapterListing['authVerified'];
+  detail: string;
+} {
+  const env = process.env;
+  switch (adapter) {
+    case 'claude': {
+      // Subscription path: no offline check. API path: ANTHROPIC_API_KEY present.
+      const path = detectAuthPath('claude');
+      if (path === 'api') {
+        return env.ANTHROPIC_API_KEY
+          ? { verified: 'env-present-not-validated', detail: 'ANTHROPIC_API_KEY present (not validated)' }
+          : { verified: false, detail: 'auth-path=api but ANTHROPIC_API_KEY not set' };
+      }
+      return { verified: 'env-present-not-validated', detail: `auth-path=${path}; subscription/cloud auth not offline-verifiable` };
+    }
+    case 'gemini': {
+      const path = detectAuthPath('gemini');
+      if (path === 'vertex') {
+        return env.GOOGLE_CLOUD_PROJECT
+          ? { verified: 'env-present-not-validated', detail: 'Vertex env present (not validated)' }
+          : { verified: false, detail: 'GOOGLE_CLOUD_PROJECT missing' };
+      }
+      const hasKey = !!(env.GEMINI_API_KEY || env.GOOGLE_API_KEY);
+      return hasKey
+        ? { verified: 'env-present-not-validated', detail: 'AI Studio key present (not validated)' }
+        : { verified: false, detail: 'neither GEMINI_API_KEY nor GOOGLE_API_KEY set' };
+    }
+    case 'codex': {
+      const path = detectAuthPath('codex');
+      if (path === 'api' || path === 'azure') {
+        return env.OPENAI_API_KEY
+          ? { verified: 'env-present-not-validated', detail: `auth-path=${path} key present (not validated)` }
+          : { verified: false, detail: 'auth-path=api but OPENAI_API_KEY not set' };
+      }
+      return {
+        verified: 'env-present-not-validated',
+        detail: 'auth-path=subscription; codex login state not offline-verifiable in v2.3',
+      };
+    }
+  }
 }

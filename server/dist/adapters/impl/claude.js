@@ -17,6 +17,7 @@
  * default in --print mode.
  */
 import { randomUUID } from 'crypto';
+import { detectClaudeError } from '../../core/adapterError.js';
 import { resolveModel } from '../tierResolver.js';
 // v2.1.1 note: `high` was claude-opus-4-7 but Anthropic's org-level cap of
 // 30k input tokens/minute on opus-4-7 makes it unreliable for non-trivial
@@ -52,6 +53,19 @@ export class ClaudeAdapter {
             env: { ...process.env, ...(inv.env ?? {}) },
             timeoutMs: inv.timeoutMs ?? this.defaultTimeoutMs,
         });
+        // v2.3 (R-DIAG-D.2): run detector for known failure shapes. Claude is
+        // unusual in that its rate-limit and auth errors arrive as English text on
+        // stdout/stderr (no JSON envelope), often with exitCode 0 OR 1 depending on
+        // the failure mode. Run the detector regardless of exitCode; the detector
+        // returns null on non-failure shapes.
+        const err = detectClaudeError({
+            stdout: result.stdout,
+            stderr: result.stderr,
+            exitCode: result.exitCode,
+            durationMs: result.durationMs,
+        }, resolved.model);
+        if (err)
+            throw err;
         return {
             text: result.stdout,
             sessionId: inv.sessionId ?? randomUUID(),

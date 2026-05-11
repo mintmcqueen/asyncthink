@@ -37,6 +37,7 @@ import { promises as fs } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import type { Adapter, AdapterInvocation, AdapterResult } from '../../core/adapter.js';
+import { detectCodexError } from '../../core/adapterError.js';
 import type { Executor } from '../../core/executor.js';
 import type { IntelligenceTier } from '../../core/manifests.js';
 import { resolveModel } from '../tierResolver.js';
@@ -102,6 +103,22 @@ export class CodexAdapter implements Adapter {
       env: { ...process.env, ...(inv.env ?? {}) } as Record<string, string>,
       timeoutMs: inv.timeoutMs ?? this.defaultTimeoutMs,
     });
+
+    // v2.3 (R-DIAG-D.2): on non-zero exit, run the codex detector for known
+    // failure shapes (401, 429, network). Throw the typed envelope; the
+    // executor's runTask persists kind + actionable into TaskState.
+    if (result.exitCode !== 0) {
+      const err = detectCodexError(
+        {
+          stdout: result.stdout,
+          stderr: result.stderr,
+          exitCode: result.exitCode,
+          durationMs: result.durationMs,
+        },
+        resolved.model
+      );
+      if (err) throw err;
+    }
 
     let text = '';
     try {

@@ -6,6 +6,9 @@
  *
  * v1: append-only JSONL at ~/.local/share/asyncthink/audit.jsonl.
  * v3: Cloud Logging.
+ *
+ * v2.3: new `task.terminated` event (R5-D.5) paired 1:1 with `task.cancel` to
+ * confirm subprocess exit. Reserves `signal: 'orphaned'` for v3 watchdog.
  */
 
 export type AuditEvent =
@@ -53,6 +56,18 @@ export type AuditEvent =
       to: string;
       tier: 'high' | 'med' | 'low';
       reason: string;
+    }
+  // v2.3 — post-exit confirmation (R5-D.5). Paired 1:1 with task.cancel.
+  | {
+      kind: 'task.terminated';
+      taskId: string;
+      adapter: string;
+      /** ISODate of the subprocess close event (or now() if no subprocess existed). */
+      terminatedAt: string;
+      /** OS signal reported by ChildProcess.on('close'), or 'orphaned' for v3 watchdog deadline. */
+      signal?: NodeJS.Signals | 'orphaned';
+      /** Exit code reported by ChildProcess.on('close'), if any. */
+      exitCode?: number;
     };
 
 export interface AuditLog {

@@ -27,8 +27,9 @@
 import { randomUUID } from 'crypto';
 import type { Adapter } from '../core/adapter.js';
 import type { Executor } from '../core/executor.js';
-import type { ManifestRegistry } from '../core/manifests.js';
+import type { ManifestRegistry, TierLimits } from '../core/manifests.js';
 import type { ThreadStore } from '../core/threadStore.js';
+import { AdapterError } from '../core/adapterError.js';
 import {
   CredentialsNotSupportedError,
   TaskNotFoundError,
@@ -48,6 +49,7 @@ import { isTerminal as isTerminalTaskStatus } from '../core/taskStore.js';
 import type { TaskState, TaskStore } from '../core/taskStore.js';
 import { LocalSubprocessExecutor } from './localSubprocess.js';
 import { checkContextLimit, resolveModel } from '../adapters/tierResolver.js';
+import { detectAuthPath, type AdapterId } from '../adapters/authPath.js';
 
 export interface LocalInProcessTaskExecutorOptions {
   adapters: AdapterLookup;
@@ -82,6 +84,25 @@ export class LocalInProcessTaskExecutor implements TaskExecutor {
   private readonly now: () => Date;
   private readonly inflight = new Map<string, InflightHandle>();
   private readonly progressListeners = new Map<string, Set<ProgressListener>>();
+  /**
+   * v2.3 (R5-D.2): in-memory shadow-state. Holds taskIds whose status='cancelled'
+   * on disk but whose subprocess hasn't yet confirmed exit. Used to defer
+   * sweeper deletion (R5-D.3) and to ensure `task.terminated` audit events fire
+   * exactly once per cancel.
+   */
+  private readonly cancelling = new Set<string>();
+  /**
+   * v2.3 (R6a-D.5): per-(adapter,model,authPath,principal) ring buffer of recent
+   * spawn timestamps for pre-flight refuse. Each value is an array of epoch-ms
+   * timestamps; entries older than the relevant `cap.windowSec` are pruned at
+   * lookup time.
+   */
+  private readonly recentSpawns = new Map<string, number[]>();
+  /**
+   * v2.3 (R-DIAG-D.4): cached auth-probe results. Key: `(adapter, principal)`.
+   * Value: `{ok, at}`. TTL 60s; cleared on a failed real call.
+   */
+  private readonly authProbeCache = new Map<string, { ok: boolean; at: number; detail?: string }>();
 
   constructor(opts: LocalInProcessTaskExecutorOptions) {
     this.adapters = opts.adapters;
@@ -119,6 +140,9 @@ export class LocalInProcessTaskExecutor implements TaskExecutor {
 
     // 4. Pre-flight context check (R6a-D.2). Resolve model first so we know the tier.
     const manifest = this.manifests ? await this.manifests.get(req.adapter) : undefined;
+    let resolvedModel: string | undefined;
+    let resolvedTier: string | undefined;
+    let resolvedLimits: TierLimits | undefined;
     if (manifest) {
       const resolved = resolveModel(
         {
@@ -135,16 +159,74 @@ export class LocalInProcessTaskExecutor implements TaskExecutor {
           auditLog: this.auditLog,
         }
       );
+      resolvedModel = resolved.model;
+      resolvedTier = resolved.tier;
+      resolvedLimits = resolved.limits;
       await checkContextLimit(
         { prompt: req.prompt, files: req.files },
         resolved.tier,
         req.adapter,
         resolved.limits
       );
-      // If substitution occurred, embed the resolved model on req so the
-      // adapter's invoke() does not need to re-resolve. The adapter will
-      // still call resolveModel() but will get the same answer; we only use
-      // the substitutedFrom signal to record on the TaskState.
+    }
+
+    // 4.5. v2.3 (R-DIAG-D.4): optional auth pre-flight. Throws AdapterError on
+    // failure BEFORE any task row is created.
+    if ((req as { preflight?: 'auth' | 'none' }).preflight === 'auth') {
+      const probe = this.preflightAuthProbe(req.adapter as AdapterId, principal);
+      if (!probe.ok) {
+        throw new AdapterError({
+          kind: 'auth',
+          adapter: req.adapter,
+          model: resolvedModel,
+          summary: `${req.adapter} pre-flight auth probe failed${probe.detail ? `: ${probe.detail}` : ''}`,
+          actionable: probeActionable(req.adapter as AdapterId),
+        });
+      }
+    }
+
+    // 4.6. v2.3 (R6a-D.5): pre-flight rate-limit refuse. Look up the
+    // auth-path-aware advisory; if rate-limited and we've already burned the
+    // budget for this minute, throw AdapterError with kind:'rate-limit'.
+    if (manifest && resolvedLimits?.rateLimit && resolvedTier) {
+      const authPath = detectAuthPath(req.adapter as AdapterId);
+      const advisory =
+        resolvedLimits.rateLimit.byAuthPath[authPath] ??
+        resolvedLimits.rateLimit.byAuthPath[resolvedLimits.rateLimit.default];
+      if (advisory?.class === 'rate-limited' && advisory.cap) {
+        const estTokens = Math.max(1, Math.ceil(req.prompt.length / 4));
+        const allowedPerMin = Math.max(
+          1,
+          Math.floor(
+            advisory.cap.tokens / estTokens / (advisory.cap.windowSec / 60)
+          )
+        );
+        const key = `${req.adapter}::${resolvedModel ?? '?'}::${authPath}::${principal ?? '<null>'}`;
+        const now = this.now().getTime();
+        const window = (advisory.cap.windowSec * 1000);
+        const bucket = (this.recentSpawns.get(key) ?? []).filter((t) => now - t < window);
+        if (bucket.length >= allowedPerMin) {
+          throw new AdapterError({
+            kind: 'rate-limit',
+            adapter: req.adapter,
+            model: resolvedModel,
+            summary:
+              `Skipping fork: tier "${resolvedTier}" via auth-path "${authPath}" ` +
+              `supports ~${allowedPerMin} forks per ${Math.round(advisory.cap.windowSec / 60)}min ` +
+              `at ~${estTokens} tokens; ${bucket.length} already in flight this window.`,
+            actionable:
+              `Reduce parallel forks, pin a different intelligence tier, or upgrade your ${authPath} quota.`,
+            details: {
+              allowedPerMin,
+              observed: bucket.length,
+              cap: advisory.cap,
+              authPath,
+            },
+          });
+        }
+        bucket.push(now);
+        this.recentSpawns.set(key, bucket);
+      }
     }
 
     // 5. Allocate task id and TaskState row.
@@ -220,8 +302,40 @@ export class LocalInProcessTaskExecutor implements TaskExecutor {
     const handle = this.inflight.get(taskId);
     if (handle) handle.cancelled = true;
 
-    if ('cancel' in this.subExec && typeof (this.subExec as LocalSubprocessExecutor).cancel === 'function') {
-      (this.subExec as LocalSubprocessExecutor).cancel(taskId);
+    const adapterId = state.adapter ?? 'unknown';
+
+    // v2.3 (R5-D.2): mark in-flight cancellation BEFORE signalling the
+    // subprocess. Sweeper sees the flag and defers deletion until exit
+    // confirms (R5-D.3).
+    this.cancelling.add(taskId);
+
+    if (
+      'cancel' in this.subExec &&
+      typeof (this.subExec as LocalSubprocessExecutor).cancel === 'function'
+    ) {
+      // Subprocess executor: signal SIGTERM + 1s grace + SIGKILL. The onExit
+      // callback fires when the subprocess actually closes (or immediately
+      // if there's no subprocess yet).
+      (this.subExec as LocalSubprocessExecutor).cancel(taskId, (code, signal) => {
+        this.cancelling.delete(taskId);
+        void this.recordAudit({
+          kind: 'task.terminated',
+          taskId,
+          adapter: adapterId,
+          terminatedAt: this.now().toISOString(),
+          signal: signal ?? undefined,
+          exitCode: code ?? undefined,
+        });
+      });
+    } else {
+      // Non-subprocess executor (fake/test). Emit terminated immediately.
+      this.cancelling.delete(taskId);
+      void this.recordAudit({
+        kind: 'task.terminated',
+        taskId,
+        adapter: adapterId,
+        terminatedAt: this.now().toISOString(),
+      });
     }
 
     const completeTime = this.now().toISOString();
@@ -234,7 +348,7 @@ export class LocalInProcessTaskExecutor implements TaskExecutor {
     await this.recordAudit({
       kind: 'task.cancel',
       taskId,
-      adapter: state.adapter ?? 'unknown',
+      adapter: adapterId,
       reason: 'caller',
     });
     const fresh = await this.taskStore.get(taskId);
@@ -287,16 +401,83 @@ export class LocalInProcessTaskExecutor implements TaskExecutor {
   }
 
   async sweepIdle(): Promise<string[]> {
-    const reaped = await this.taskStore.cleanupStale();
+    // v2.3 (R5-D.3): pass `cancelling` set so the store defers deletion for
+    // tasks whose subprocess hasn't confirmed exit (up to the 30m hard
+    // ceiling enforced inside cleanupStale).
+    const reaped = await this.taskStore.cleanupStale({ skip: this.cancelling });
     for (const id of reaped) {
-      await this.recordAudit({
-        kind: 'task.expire',
-        taskId: id,
-        adapter: 'unknown',
-        reason: 'ttl',
-      });
+      // If the reap happened despite the skip set (i.e. hit the 30m hard
+      // ceiling), emit `task.terminated` with signal:'orphaned' AND clear
+      // the cancelling flag.
+      if (this.cancelling.has(id)) {
+        this.cancelling.delete(id);
+        await this.recordAudit({
+          kind: 'task.terminated',
+          taskId: id,
+          adapter: 'unknown',
+          terminatedAt: this.now().toISOString(),
+          signal: 'orphaned',
+        });
+      } else {
+        await this.recordAudit({
+          kind: 'task.expire',
+          taskId: id,
+          adapter: 'unknown',
+          reason: 'ttl',
+        });
+      }
     }
     return reaped;
+  }
+
+  /**
+   * v2.3 (R-DIAG-D.4): cached local auth probe. Returns `{ok}` based on cheap
+   * LOCAL checks only — never paid API calls. 60s TTL keyed by adapter+principal.
+   *
+   * For v2.3 (single-tenant local with principal=null), the probe is a pure
+   * env-presence check plus a binary-existence check. v3 will graduate this to
+   * a real `claude auth status` / `codex login status` subprocess call.
+   */
+  private preflightAuthProbe(
+    adapter: AdapterId,
+    principal: string | null
+  ): { ok: boolean; detail?: string } {
+    const key = `${adapter}::${principal ?? '<null>'}`;
+    const cached = this.authProbeCache.get(key);
+    const now = this.now().getTime();
+    if (cached && now - cached.at < 60_000) {
+      return { ok: cached.ok, detail: cached.detail };
+    }
+    const env = process.env;
+    let result: { ok: boolean; detail?: string };
+    if (adapter === 'claude') {
+      // Subscription path: trust the user; we can't probe without spawning
+      // claude. API path requires ANTHROPIC_API_KEY. Vertex requires GCP creds
+      // we can't sanity-check locally. Bedrock requires AWS creds.
+      result = { ok: true, detail: 'env-presence-only' };
+    } else if (adapter === 'gemini') {
+      const hasKey =
+        (!!env.GEMINI_API_KEY && env.GEMINI_API_KEY.length > 0) ||
+        (!!env.GOOGLE_API_KEY && env.GOOGLE_API_KEY.length > 0);
+      const hasVertex =
+        env.GOOGLE_GENAI_USE_VERTEXAI === 'true' && !!env.GOOGLE_CLOUD_PROJECT;
+      result = hasKey || hasVertex
+        ? { ok: true, detail: hasVertex ? 'vertex-env-present' : 'api-key-present' }
+        : {
+            ok: false,
+            detail: 'neither GEMINI_API_KEY nor GOOGLE_API_KEY (nor Vertex env) set',
+          };
+    } else {
+      // codex: subscription (codex login) or OPENAI_API_KEY. Subscription is
+      // checked via `~/.codex/auth.json` existence in v3; for v2.3 we trust
+      // the user's setup and only fail-fast when env is empty.
+      const hasKey = !!env.OPENAI_API_KEY && env.OPENAI_API_KEY.length > 0;
+      result = hasKey
+        ? { ok: true, detail: 'api-key-present' }
+        : { ok: true, detail: 'subscription-assumed' };
+    }
+    this.authProbeCache.set(key, { ok: result.ok, detail: result.detail, at: now });
+    return result;
   }
 
   private async runTask(
@@ -307,6 +488,7 @@ export class LocalInProcessTaskExecutor implements TaskExecutor {
     const childThreadId = req.threadId ?? taskId;
     let envelope: TaskExecutorResultEnvelope | undefined;
     let failureMessage: string | undefined;
+    let adapterError: AdapterError | undefined;
     try {
       if (this.threadStore) {
         await this.threadStore.open(childThreadId, adapter.id);
@@ -354,6 +536,25 @@ export class LocalInProcessTaskExecutor implements TaskExecutor {
       }
     } catch (err) {
       failureMessage = err instanceof Error ? err.message : String(err);
+      // v2.3 (R-DIAG-D.1): if the adapter threw AdapterError, preserve its
+      // typed kind + actionable on the TaskState. Failure-classification work
+      // happens in the per-adapter detectors; this just persists the verdict.
+      if (err instanceof AdapterError) {
+        adapterError = err;
+      } else if (
+        err &&
+        typeof err === 'object' &&
+        'code' in err &&
+        (err as NodeJS.ErrnoException).code === 'ENOENT'
+      ) {
+        // Subprocess spawn rejection: synthesize binary-missing.
+        adapterError = new AdapterError({
+          kind: 'binary-missing',
+          adapter: adapter.id,
+          summary: `${adapter.id} binary not on PATH`,
+          actionable: `Install the ${adapter.id} CLI and ensure it's on PATH.`,
+        });
+      }
     }
 
     // If cancel arrived while running, the subprocess was killed and the
@@ -387,6 +588,7 @@ export class LocalInProcessTaskExecutor implements TaskExecutor {
       });
     } else {
       const errMsg =
+        adapterError?.summary ??
         failureMessage ??
         (envelope ? `exit code ${envelope.exitCode}` : 'unknown task failure');
       await this.taskStore.update(taskId, {
@@ -395,6 +597,8 @@ export class LocalInProcessTaskExecutor implements TaskExecutor {
         durationMs: envelope?.durationMs,
         sessionId: envelope?.sessionId,
         exitCode: envelope?.exitCode,
+        errorKind: adapterError?.kind,
+        errorActionable: adapterError?.actionable,
         completeTime,
         lastUpdatedAt: completeTime,
       });
@@ -446,6 +650,17 @@ export class LocalInProcessTaskExecutor implements TaskExecutor {
 
 function newTaskId(): string {
   return `tsk-${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`;
+}
+
+function probeActionable(adapter: AdapterId): string {
+  switch (adapter) {
+    case 'claude':
+      return 'Run `claude /login` to authenticate, or set ANTHROPIC_API_KEY in env.';
+    case 'gemini':
+      return 'Set GEMINI_API_KEY or GOOGLE_API_KEY in env (or enable Vertex via GOOGLE_GENAI_USE_VERTEXAI=true + GOOGLE_CLOUD_PROJECT).';
+    case 'codex':
+      return 'Run `codex login`, or set a valid OPENAI_API_KEY.';
+  }
 }
 
 function projectState(state: TaskState): TaskExecutorState {

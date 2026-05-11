@@ -29,6 +29,13 @@ export interface FsTaskStoreOptions {
 }
 /** Category-wise sweep TTLs (R-DUR-D.4). All ms. */
 export declare const SWEEP_TTL_MS: Record<string, number>;
+/**
+ * v2.3 (R5-D.4): hard ceiling on the "skip while subprocess is cancelling"
+ * protection. Past this age, the sweeper force-deletes the cancelled task
+ * even if its subprocess hasn't confirmed exit (and the executor will emit
+ * `task.terminated` with `signal: 'orphaned'`).
+ */
+export declare const CANCELLING_HARD_CEILING_MS: number;
 export declare class FsTaskStore implements TaskStore {
     private readonly rootDir;
     private readonly mem;
@@ -44,8 +51,15 @@ export declare class FsTaskStore implements TaskStore {
     /**
      * Reap tasks whose `lastUpdatedAt` (or `startTime` fallback) exceeds the
      * per-category TTL. Removes from memory and disk. Returns reaped ids.
+     *
+     * v2.3 (R5-D.3): `opts.skip` protects in-flight-cancelling tasks from
+     * deletion while their subprocess hasn't confirmed exit. Skipped tasks are
+     * still subject to the hard ceiling (R5-D.4) — past 30 minutes in the
+     * skip set, the sweeper force-deletes anyway.
      */
-    cleanupStale(): Promise<string[]>;
+    cleanupStale(opts?: {
+        skip?: Set<string>;
+    }): Promise<string[]>;
     /**
      * Optional helper for tests / debugging: reload all tasks from disk into
      * memory. Used to recover state when reattaching to an existing dir.

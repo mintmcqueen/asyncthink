@@ -188,7 +188,12 @@ export async function checkContextLimit(
   }
   const approxTokenCount = Math.ceil(totalChars / 4);
   if (approxTokenCount > limits.maxContext) {
-    throw new ContextLimitExceededError(approxTokenCount, limits.maxContext, tier, adapterId);
+    throw new ContextLimitExceededError({
+      approxTokens: approxTokenCount,
+      maxTokens: limits.maxContext,
+      tier,
+      adapter: adapterId,
+    });
   }
 }
 

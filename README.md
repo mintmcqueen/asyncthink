@@ -14,16 +14,65 @@ A Claude Code plugin (and MCP server) for sequential thinking with parallel fork
 - **Audit log** — append-only JSONL of every adapter invocation, thread lifecycle event, task lifecycle event, and model substitution. Daily rotation with 90-day retention.
 - **XDG-compliant persistence** at `~/.local/share/asyncthink/` (threads, tasks, audit log).
 
-## Install
+## Installing & updating
 
-### As a Claude Code plugin (development)
+### First-time install
 
-From a directory containing this repo:
 ```sh
-claude --plugin-dir ./asyncthink
+git clone https://github.com/mintmcqueen/asyncthink.git
+cd asyncthink
+claude plugin marketplace add .
+claude plugin install asyncthink@asyncthink-local
 ```
 
-This loads the plugin and exposes its tools and slash commands in your Claude Code session.
+Then **restart Claude Code** (exit and re-launch — `/clear` is insufficient).
+
+Verify the install:
+```sh
+claude plugin list | grep asyncthink
+```
+
+The version should match `.claude-plugin/marketplace.json#plugins[0].version`.
+
+### Updating to a newer version
+
+After `git pull` brings in a version bump (or you've bumped locally):
+
+```sh
+cd server
+npm run reinstall
+```
+
+This verifier:
+1. Asserts the version triple (`marketplace.json`, `plugin.json`, `server/package.json`) agrees.
+2. Warns if your working tree is dirty or `HEAD` is ahead of `origin/develop`.
+3. Runs `claude plugin marketplace update asyncthink-local` and `claude plugin install asyncthink@asyncthink-local`.
+4. Prints the new bookmark for verification.
+5. Reminds you to restart Claude Code.
+
+`npm run reinstall` never auto-commits or auto-pushes.
+
+**Important footgun:** `claude plugin install` clones from `origin/develop` on GitHub. *Unpushed local commits are invisible to the install.* Push your bump to `develop` before reinstalling, or use the dev loop below.
+
+### Dev loop (load from source tree)
+
+For iterating without a publish/install cycle:
+
+```sh
+claude --plugin-dir /path/to/asyncthink
+```
+
+This loads the plugin directly from the source tree on each Claude Code startup. Skips marketplace + cache + bookmark.
+
+### Cache hygiene
+
+The plugin manager never auto-prunes old version directories. Use:
+
+```sh
+cd server
+npm run cache:status   # show bookmarked / orphaned / stranded cache dirs
+npm run cache:prune    # remove non-bookmarked dirs
+```
 
 ### As a standalone MCP server
 
@@ -34,6 +83,16 @@ npm run build
 ```
 
 Then point your MCP client at `server/dist/index.js`.
+
+### Troubleshooting
+
+| Symptom | Fix |
+| --- | --- |
+| `asyncthink_config` reports an older version than `marketplace.json` | Run `npm run reinstall` and restart Claude Code. |
+| Tools `tasks_get`/`tasks_list`/`tasks_cancel`/`tasks_result` missing (v2.2+) | Your cache has a pre-2.2 build. Run `npm run reinstall`. |
+| Version did not change after reinstall | Confirm all three of `marketplace.json`/`plugin.json`/`server/package.json` agree AND that the bump is pushed to `origin/develop`. |
+| Gemini fork returns operational noise instead of an answer | Check `~/.gemini/settings.json` for unhealthy MCP servers. v2.3 mitigates this with a curated allowlist (`["sequentialthinking", "context7"]`), but a stale entry can still surface. |
+| 429 from claude-haiku on parallel forks | v2.3 detects this and refuses over-budget forks at spawn (R6a-D.5). Either pin a different tier (`intelligence: "med"`) or upgrade your Anthropic tier. |
 
 ## Prerequisites
 

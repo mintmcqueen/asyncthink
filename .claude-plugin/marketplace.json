@@ -9,7 +9,7 @@
   "plugins": [
     {
       "name": "asyncthink",
-      "version": "2.2.0",
+      "version": "2.3.0",
       "description": "Sequential thinking with parallel competitor council and threaded delegation to subordinate model CLIs (gemini, codex, claude). Read-only, multi-perspective reasoning support for the central orchestrator.",
       "category": "productivity",
       "source": {

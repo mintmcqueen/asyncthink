@@ -1,6 +1,22 @@
 # AsyncThink MCP Server — Developer Documentation
 
-> **Status:** v2.2.0 released. Background-jobs (MCP Tasks primitive), tier-model rework, skill-pinning policy, credentials wire-stub. The v1.1.9 git tag remains the historical pin for v1 behavior; v2.0.0 onwards is the modular refactor.
+> **Status:** v2.3.0 released. Fix-pack: gemini parser hardening (F3), typed AdapterError envelope + auth pre-flight (R-DIAG), auth-path-aware rate-limit advisories (R6a amendments), curated MCP-server allowlist (F3-D.2), cancellation post-exit confirmation (R5). Builds on v2.2 (background jobs, tier-model rework, skill pinning, credentials wire-stub). v2.0.0 onwards is the modular refactor; v1.1.9 git tag remains the historical pin for v1 behavior.
+
+## Quick install / update
+
+```sh
+# First time (from this repo):
+git clone https://github.com/mintmcqueen/asyncthink.git
+cd asyncthink
+claude plugin marketplace add .
+claude plugin install asyncthink@asyncthink-local
+# Then: restart Claude Code. /clear is insufficient.
+
+# Updating after a version bump:
+npm run reinstall          # in server/; verifies version triple, runs marketplace update + install, prints restart reminder
+```
+
+**Important footgun:** `claude plugin install` clones from `origin/develop` on GitHub. Unpushed local commits are invisible to install. Use `claude --plugin-dir <repo>` for the source-loop alternative during development. See README.md "Installing & updating" for the full runbook.
 
 ## Purpose
 
@@ -10,12 +26,12 @@ AsyncThink is an MCP server for sequential thinking with optional parallel forks
 
 | Tool | Purpose |
 | --- | --- |
-| `asyncthink` | Sequential thinking + parallel forks (council). Auto-closes chain on `nextThoughtNeeded:false`. v2.2: `forks[].async` for detached fire-and-forget. |
-| `delegate` | Open or continue a single-subordinate thread. Inline `close: true` for one-round-trip. v2.2: `async`, `idempotencyKey`, `ttlMs`, `credentials`. |
+| `asyncthink` | Sequential thinking + parallel forks (council). Auto-closes chain on `nextThoughtNeeded:false`. v2.2: `forks[].async` for detached fire-and-forget. v2.3: `forks[].mcpServers` + `forks[].preflight`. |
+| `delegate` | Open or continue a single-subordinate thread. Inline `close: true` for one-round-trip. v2.2: `async`, `idempotencyKey`, `ttlMs`, `credentials`. v2.3: `mcpServers` (additive allowlist), `preflight: 'auth'` (opt-in local probe). |
 | `delegate_close` | Close a thread. Idempotent. |
 | `delegate_close_all` | End-of-session safety net. |
 | `delegate_list_threads` | Introspection: open threads, adapter, idle time. |
-| `asyncthink_config` | View config: adapters (with tierLimits), skills (with pinsModel/pinIsCurrent), tasks. New v2.2 actions: `list_tasks`, `cancel_task`. |
+| `asyncthink_config` | View config: adapters (with tierLimits, authPath, mcp), skills (with pinsModel/pinIsCurrent), tasks. v2.2 actions: `list_tasks`, `cancel_task`. v2.3: optional `verify: true` arg runs local auth probes. |
 | `tasks_get` (v2.2) | Snapshot a task's status. Idempotent. |
 | `tasks_list` (v2.2) | Cursor-paginated list of tasks; principal-bound. |
 | `tasks_cancel` (v2.2) | Best-effort cancel (SIGTERM + state flip). Idempotent. |
@@ -210,9 +226,15 @@ The sweeper runs on every tool call (rate-limited to once per 30s) and reaps tas
 
 Caller-supplied `ttlMs` is clamped to `[60s, 60m]`. Reaped tasks emit a `task.expire` audit event and are deleted from the FsTaskStore mirror.
 
-### Cancellation (R-DUR-D.5)
+### Cancellation (R-DUR-D.5 + v2.3 R5)
 
 `tasks_cancel({taskId})` flips the state to `cancelled` immediately and signals SIGTERM to the registered subprocess group via `LocalSubprocessExecutor.cancel(taskId)`. SIGKILL follows after a 1s grace. Cancellation is best-effort: the underlying subprocess may take milliseconds to actually exit, but the protocol-visible state flips synchronously. Cancelling a task that hasn't yet spawned (cancellation arrived between `start()` and the subprocess `spawn`) is queued — applied as soon as the process exists.
+
+**v2.3 internal refinement (R5-D.2 … R5-D.5):** wire-level status is `cancelled` immediately (MCP Tasks spec forbids a `cancelling` value). Internally, the executor tracks an in-memory `Set<string>` of taskIds whose subprocess hasn't confirmed exit. The sweeper (`cleanupStale`) honors this set and skips deletion until the `proc.on('close')` listener fires — at which point a `task.terminated` audit event is emitted with `terminatedAt`, optional `signal`, optional `exitCode`. The 5-minute `cancelled` TTL is preserved.
+
+**30-minute hard ceiling (R5-D.4):** if a subprocess truly hangs and never exits, the sweeper force-deletes the row past `CANCELLING_HARD_CEILING_MS = 30 * 60_000` and emits `task.terminated` with `signal: 'orphaned'`. Bounds the in-memory protection so a permanently-wedged subprocess can't pin the FsTaskStore mirror indefinitely.
+
+**Multi-tenant gap (v3):** v2.3 is single-tenant local; an unreaped subprocess is bounded by the user's own machine. v3 will add a `waitpid` watchdog with bounded reap deadline before declaring the slot freed — the `task.terminated` audit event in v2.3 seeds the observability that v3 watchdog needs.
 
 ### Ownership / principal binding (R-DUR-D.2)
 
@@ -221,6 +243,61 @@ Every `TaskState` carries a `principal` field. v2.2 single-tenant local: `princi
 ### v3 trajectory
 
 `server/src/core/taskExecutor.ts` defines the `TaskExecutor` interface. v2.2 ships `LocalInProcessTaskExecutor`. v3 will ship `RemoteCompanionTaskExecutor` — same interface, but execution dispatches via OAuth-authenticated companion daemon. The tool surface, lifecycle states, idempotency semantics, TTL policy, and audit event shapes all stay identical.
+
+## Adapter Failure Diagnostics (v2.3)
+
+Adapter failures surface as a typed `AdapterError` envelope (see `server/src/core/adapterError.ts`) instead of opaque stdout/stderr strings. Kinds:
+
+| `kind` | Trigger | Where to look |
+| --- | --- | --- |
+| `auth` | claude `Invalid API key`/`Please run /login`; gemini stderr `GEMINI_API_KEY environment variable` or `API_KEY_INVALID`; codex NDJSON `401 Unauthorized`/`Missing bearer` | Run `claude /login`, set `ANTHROPIC_API_KEY` / `GEMINI_API_KEY` / `OPENAI_API_KEY`, or `codex login` |
+| `rate-limit` | claude `Rate limit reached ... 50,000 tokens per minute`; gemini `RESOURCE_EXHAUSTED`; codex NDJSON `429`/`Too Many Requests` | Wait per advisory, pin a different tier, or upgrade provider quota |
+| `context` | Pre-flight prompt+files token estimate exceeds tier `maxContext` | Smaller prompt or higher-context tier |
+| `network` | `ECONNRESET`/`ENOTFOUND`/`failed to connect` (no auth context) | Check internet + provider status page |
+| `binary-missing` | `ENOENT` on adapter spawn | Install the CLI; ensure on PATH |
+| `timeout` | Subprocess exit 124 + executor's `[timeout after Xms]` marker | Reduce prompt or raise `timeoutMs` |
+| `silent-failure` | Adapter exited 0 but parser yielded only known noise (e.g. gemini's `MCP issues detected. Run /mcp list for status.`) | Check `~/.gemini/settings.json` for unhealthy MCP servers; F3-D.3 throws this typed kind so the orchestrator gets a structured failure instead of empty `output` |
+| `unknown` | Catch-all; raw output preserved on `state.raw` | Inspect via `tasks_get` for the raw envelope |
+
+**Where the envelope lives:**
+- TaskState gets `errorKind` + `errorActionable` fields (R-DIAG-D.1) — persisted to disk in `~/.local/share/asyncthink/tasks/<id>/state.json`.
+- Council fork output in the asyncthink-tool response carries the envelope when the fork failed (R-DIAG-D.5).
+- `tasks_get` / `tasks_result` reveal the full envelope to clients.
+
+**Pre-flight (R-DIAG-D.3, R-DIAG-D.4):**
+- `asyncthink_config({action:"list_adapters", verify:true})` runs cheap LOCAL probes (env-var + binary presence; never paid API calls). Result fields per adapter: `authPath` (which path the env probe selected), `authVerified` (`true`|`false`|`'env-present-not-validated'`|`'not-checked'`).
+- `delegate`/`asyncthink fork` accepts `preflight: 'auth'` — runs the same probe before allocating a task row. Default OFF (back-compat). Skills can pin via frontmatter (`preflight: auth`).
+
+## MCP-server allowlist for adapter spawns (v2.3 F3-D.2)
+
+Gemini and codex are spawned with a curated MCP-server allowlist instead of inheriting the user's full `~/.gemini/settings.json` (or codex equivalent). This was added after the v2.2 playtest found a 60s hang triggered by an unhealthy user-MCP server.
+
+**Default:** `["sequentialthinking", "context7"]` for both gemini and codex (see `mcp.allowlist` in `server/src/adapters/manifests/{gemini,codex}.json`). Claude is included for consistency; claude's MCP system uses a separate `~/.claude.json` config that the adapter doesn't currently filter.
+
+**Extending:**
+- Per-skill: add `mcp_servers: [foo, bar]` to skill frontmatter — merged additively over the default.
+- Per-call: pass `mcpServers: ["foo", "bar"]` to `delegate` or `forks[]`.
+- The merge is union-only — skills/callers MAY extend but MAY NOT remove a default server. This keeps the audit story one-way ("which servers did this fork have access to?").
+
+**Per-adapter flag mapping:**
+- gemini: `--allowed-mcp-server-names <comma-list>` (verified against gemini-cli v0.39.x).
+- codex: v2.3 ships the manifest field but does NOT yet enforce at argv level (codex v0.125 has no flag-level allowlist; the field is informational until v2.4 adds a `$CODEX_HOME` override pattern).
+
+## Auth-path-aware rate-limit advisories (v2.3 R6a-D.4)
+
+Each adapter can reach its model provider through multiple auth paths with materially different rate-limit semantics:
+
+| Adapter | Auth paths supported |
+| --- | --- |
+| claude | `subscription` (default, Claude Code session); `api` (`ANTHROPIC_API_KEY`); `vertex` (`CLAUDE_CODE_USE_VERTEX=1`); `bedrock` (`CLAUDE_CODE_USE_BEDROCK=1`) |
+| gemini | `ai-studio` (default; `GEMINI_API_KEY` or `GOOGLE_API_KEY`); `vertex` (`GOOGLE_GENAI_USE_VERTEXAI=true` + `GOOGLE_CLOUD_PROJECT`) |
+| codex | `subscription` (default; `codex login`); `api` (`OPENAI_API_KEY`); `azure` (Azure OpenAI env config) |
+
+`detectAuthPath(adapter, env)` (in `server/src/adapters/authPath.ts`) probes the env to pick a path. The selected path keys into `tierLimits.<tier>.rateLimit.byAuthPath` for the right advisory. Example: a user with `ANTHROPIC_API_KEY` set on claude `low` tier sees the Tier-1 ITPM cap of 50,000 input-tokens/minute (the playtest's 429); a Vertex user sees a `standard` advisory because their cap is governed by GCP project quotas (not Anthropic's org-wide cap).
+
+**Pre-flight refuse (R6a-D.5):** at fork-spawn, the executor computes `forks_allowed_per_minute = floor(cap.tokens / estimatedPromptTokens / (cap.windowSec / 60))`. If the council already burned that budget, the over-limit fork is skipped with a typed `kind: 'rate-limit'` AdapterError envelope and the council continues with the remaining forks. The advisory was informational in v2.2; it is enforcement in v2.3.
+
+**Staleness tripwire (R6a-D.7):** `list_adapters` walks every cell's `rateLimit.lastVerified` and emits a stderr warning for cells older than 90 days. Bootstrap value is `2026-04-29` for all v2.3 cells.
 
 ## Per-Delegate Credentials (v3 contract; v2.2 wire-only)
 
@@ -243,6 +320,7 @@ This contract lets users plan multi-tenant or per-task credential isolation with
 | `task.create` (v2.2) | `taskId, adapter, detached, principal, idempotencyKey?` | TaskExecutor.start |
 | `task.complete` / `task.fail` (v2.2) | `taskId, adapter, durationMs, error?` | TaskExecutor terminal transition |
 | `task.cancel` / `task.expire` (v2.2) | `taskId, adapter, reason?` | tasks_cancel / sweeper |
+| `task.terminated` (v2.3) | `taskId, adapter, terminatedAt, signal?, exitCode?` | Paired 1:1 with `task.cancel`; emitted from the subprocess `close` listener (or immediately if no subprocess existed). Reserves `signal: 'orphaned'` for v3 watchdog. |
 | `model.substitute` (v2.2) | `adapter, from, to, tier, reason` | SkillResolver R6b-D.2 substitution |
 | `cred.use` (reserved) | (deferred to v3 per R-CRED-D.4) | — |
 

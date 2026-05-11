@@ -220,6 +220,36 @@ describe('FsSkillRegistry', () => {
     expect(s?.pinIsCurrent).toBe(true);
   });
 
+  it('parses mcp_servers as inline list (v2.3 F3-D.2)', async () => {
+    writeSkill(
+      pluginDir,
+      'mcp-extending',
+      'adapter: gemini\ndescription: x\nmcp_servers: [repo-rag, arxiv]',
+      'body'
+    );
+    const reg = new FsSkillRegistry({ pluginSkillsDir: pluginDir, userSkillsDir: userDir });
+    const s = await reg.get('mcp-extending');
+    expect(s?.mcpServers).toEqual(['repo-rag', 'arxiv']);
+  });
+
+  it('parses preflight: auth from frontmatter (v2.3 R-DIAG-D.4)', async () => {
+    writeSkill(
+      pluginDir,
+      'careful-skill',
+      'adapter: claude\ndescription: x\npreflight: auth',
+      'body'
+    );
+    const reg = new FsSkillRegistry({ pluginSkillsDir: pluginDir, userSkillsDir: userDir });
+    const s = await reg.get('careful-skill');
+    expect(s?.preflight).toBe('auth');
+  });
+
+  it('preflight ignored when value is not auth|none', async () => {
+    writeSkill(pluginDir, 's', 'adapter: claude\ndescription: x\npreflight: weird', 'body');
+    const reg = new FsSkillRegistry({ pluginSkillsDir: pluginDir, userSkillsDir: userDir });
+    expect((await reg.get('s'))?.preflight).toBeUndefined();
+  });
+
   it('pinIsCurrent: false when pinned model is NOT in adapter manifest tiers', async () => {
     writeSkill(
       pluginDir,

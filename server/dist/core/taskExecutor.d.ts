@@ -92,13 +92,7 @@ export declare class TaskOwnerMismatchError extends Error {
 export declare class CredentialsNotSupportedError extends Error {
     constructor(profile: string);
 }
-export declare class ContextLimitExceededError extends Error {
-    readonly approxTokens: number;
-    readonly maxTokens: number;
-    readonly tier: IntelligenceTier;
-    readonly adapter: string;
-    constructor(approxTokens: number, maxTokens: number, tier: IntelligenceTier, adapter: string);
-}
+export { ContextLimitExceededError } from './adapterError.js';
 export interface AdapterLookup {
     get(id: string): Adapter | undefined;
     list(): Adapter[];

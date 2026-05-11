@@ -173,6 +173,38 @@ describe('FsTaskStore', () => {
       expect(reaped).toContain('f');
     });
 
+    // v2.3 (R5-D.3, R5-D.4)
+    it('skip filter protects in-flight cancelling tasks from deletion', async () => {
+      const s = new FsTaskStore({
+        rootDir: tmp,
+        now: () => new Date('2026-01-01T00:00:00Z'),
+      });
+      await s.create('cancellingTask', 'work');
+      await s.update('cancellingTask', { status: 'cancelled' });
+      Object.defineProperty(s, 'now', {
+        value: () => new Date('2026-01-01T00:06:00Z'),
+      });
+      // Without skip: would reap (past 5m TTL).
+      // With skip: protected.
+      const reaped = await s.cleanupStale({ skip: new Set(['cancellingTask']) });
+      expect(reaped).not.toContain('cancellingTask');
+      expect(await s.get('cancellingTask')).toBeTruthy();
+    });
+
+    it('hard ceiling (30m) force-deletes even if in skip set', async () => {
+      const s = new FsTaskStore({
+        rootDir: tmp,
+        now: () => new Date('2026-01-01T00:00:00Z'),
+      });
+      await s.create('orphanTask', 'work');
+      await s.update('orphanTask', { status: 'cancelled' });
+      Object.defineProperty(s, 'now', {
+        value: () => new Date('2026-01-01T00:31:00Z'),
+      });
+      const reaped = await s.cleanupStale({ skip: new Set(['orphanTask']) });
+      expect(reaped).toContain('orphanTask');
+    });
+
     it('cancelled tasks reaped after 5m', async () => {
       const s = new FsTaskStore({
         rootDir: tmp,

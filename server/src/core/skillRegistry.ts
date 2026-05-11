@@ -51,6 +51,18 @@ export interface Skill {
    * adapter manifests are loaded (R6b-D.3).
    */
   pinIsCurrent?: boolean;
+  /**
+   * v2.3 — additive MCP-server allowlist for adapter spawn (F3-D.2). Merged
+   * with `manifest.mcp.allowlist` and caller's `mcpServers` at spawn time;
+   * skills CANNOT remove servers from the union.
+   */
+  mcpServers?: string[];
+  /**
+   * v2.3 — opt-in auth pre-flight gate (R-DIAG-D.4). When 'auth', the
+   * executor runs a local auth-status probe before allocating a task row;
+   * fails fast with AdapterError(kind='auth') on probe failure.
+   */
+  preflight?: 'auth' | 'none';
 }
 
 export interface SkillRegistry {

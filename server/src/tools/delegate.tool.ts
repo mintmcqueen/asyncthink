@@ -115,6 +115,18 @@ export function registerDelegateTools(server: McpServer): void {
           .describe(
             "v2.2 — credential profile name. v2.2 only accepts 'default'; non-default profiles will be supported in v3."
           ),
+        mcpServers: z
+          .array(z.string())
+          .optional()
+          .describe(
+            'v2.3 — additive MCP-server allowlist for the adapter subprocess (F3-D.2). Merged with manifest defaults and any skill-supplied list.'
+          ),
+        preflight: z
+          .enum(['auth', 'none'])
+          .optional()
+          .describe(
+            "v2.3 — opt-in auth pre-flight (R-DIAG-D.4). When 'auth', runs a local probe before spawning; fails fast on missing/invalid auth."
+          ),
       },
     },
     async (args) => {
@@ -126,6 +138,8 @@ export function registerDelegateTools(server: McpServer): void {
       let model = args.model;
       let timeoutMs = args.timeoutMs;
       let credentials = args.credentials;
+      let mcpServers = args.mcpServers;
+      let preflight = args.preflight;
       if (args.skill) {
         const resolved = await resolveSkill(
           getSkillRegistry(),
@@ -146,6 +160,12 @@ export function registerDelegateTools(server: McpServer): void {
         model = resolved.model;
         timeoutMs = resolved.timeoutMs;
         credentials = resolved.credentials;
+        // v2.3: skill frontmatter extends mcp/preflight; caller can further
+        // extend mcpServers (additive); caller's preflight overrides skill's.
+        if (resolved.mcpServers && resolved.mcpServers.length > 0) {
+          mcpServers = [...new Set([...(mcpServers ?? []), ...resolved.mcpServers])];
+        }
+        preflight = args.preflight ?? resolved.preflight;
       }
       if (!adapter) {
         throw new Error('delegate: either `adapter` or `skill` must be supplied.');
@@ -166,6 +186,8 @@ export function registerDelegateTools(server: McpServer): void {
             idempotencyKey: args.idempotencyKey,
             ttlMs: args.ttlMs,
             credentials,
+            mcpServers,
+            preflight,
           });
           return {
             content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
@@ -184,6 +206,7 @@ export function registerDelegateTools(server: McpServer): void {
           intelligence,
           model,
           credentials,
+          mcpServers,
         });
         return {
           content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],

@@ -64,6 +64,14 @@ export function registerAsyncThinkTool(server) {
                     .string()
                     .optional()
                     .describe("v2.2 — credential profile name. v2.2 only accepts 'default'; non-default profiles will be supported in v3."),
+                mcpServers: z
+                    .array(z.string())
+                    .optional()
+                    .describe('v2.3 — additive MCP-server allowlist for this fork. Merged with manifest + skill defaults; cannot remove (F3-D.2).'),
+                preflight: z
+                    .enum(['auth', 'none'])
+                    .optional()
+                    .describe("v2.3 — opt-in auth probe before spawning this fork. Off by default; skills can pin via frontmatter (R-DIAG-D.4)."),
             }))
                 .optional()
                 .describe('Forks to spawn during this thought.'),
@@ -111,6 +119,8 @@ export function registerAsyncThinkTool(server) {
                     let intelligence = f.intelligence;
                     let model = f.model;
                     let credentials = f.credentials;
+                    let mcpServers = f.mcpServers;
+                    let preflight = f.preflight;
                     if (f.skill) {
                         const resolved = await resolveSkill(getSkillRegistry(), {
                             skill: f.skill,
@@ -125,6 +135,11 @@ export function registerAsyncThinkTool(server) {
                         intelligence = resolved.intelligence;
                         model = resolved.model;
                         credentials = resolved.credentials;
+                        // v2.3 — extend allowlist additively; caller's preflight wins over skill's.
+                        if (resolved.mcpServers && resolved.mcpServers.length > 0) {
+                            mcpServers = [...new Set([...(mcpServers ?? []), ...resolved.mcpServers])];
+                        }
+                        preflight = f.preflight ?? resolved.preflight;
                     }
                     if (!adapter) {
                         throw new Error(`fork "${f.id}": either adapter or skill must be supplied.`);
@@ -149,6 +164,9 @@ export function registerAsyncThinkTool(server) {
                             threadId: `${chainId}::${f.id}`,
                             parentChainId: chainId,
                             skill: f.skill,
+                            // v2.3 — additive allowlist + opt-in preflight (F3-D.2, R-DIAG-D.4).
+                            ...(mcpServers !== undefined && { mcpServers }),
+                            ...(preflight !== undefined && { preflight }),
                         });
                         detachedTaskIds.push({ forkId: f.id, taskId: state.taskId });
                         continue;
@@ -163,6 +181,9 @@ export function registerAsyncThinkTool(server) {
                         skill: f.skill,
                         parentThreadId: chainId,
                         thoughtNumber: args.thoughtNumber,
+                        // v2.3 — additive MCP allowlist + preflight propagate to council forks.
+                        ...(mcpServers !== undefined && { mcpServers }),
+                        ...(preflight !== undefined && { preflight }),
                     });
                 }
                 catch (e) {

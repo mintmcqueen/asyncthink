@@ -17,21 +17,10 @@ export class CredentialsNotSupportedError extends Error {
         this.name = 'CredentialsNotSupportedError';
     }
 }
-export class ContextLimitExceededError extends Error {
-    approxTokens;
-    maxTokens;
-    tier;
-    adapter;
-    constructor(approxTokens, maxTokens, tier, adapter) {
-        super(`Estimated context (${approxTokens} tokens) exceeds adapter "${adapter}" tier "${tier}" max ` +
-            `(${maxTokens} tokens). Switch to a higher tier or shorten the prompt.`);
-        this.approxTokens = approxTokens;
-        this.maxTokens = maxTokens;
-        this.tier = tier;
-        this.adapter = adapter;
-        this.name = 'ContextLimitExceededError';
-    }
-}
+// v2.3 — ContextLimitExceededError is now a subclass of AdapterError (R-DIAG-D.6).
+// Re-exported here so existing imports keep working; new code should import from
+// '../core/adapterError.js' directly.
+export { ContextLimitExceededError } from './adapterError.js';
 /** Category-wise TTL caps (R-DUR-D.4). All values in ms. */
 export const CATEGORY_TTL_MS = {
     working: 60 * 60_000, // 60 minutes

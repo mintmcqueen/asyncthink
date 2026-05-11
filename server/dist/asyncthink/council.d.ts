@@ -35,6 +35,10 @@ export interface ForkRequest {
     parentThreadId: string;
     /** Thought number that spawned this fork. */
     thoughtNumber: number;
+    /** v2.3 — additive MCP-server allowlist (F3-D.2). */
+    mcpServers?: string[];
+    /** v2.3 — auth pre-flight opt-in (R-DIAG-D.4). Not yet wired through council path. */
+    preflight?: 'auth' | 'none';
 }
 export interface ChainStatus {
     pending: string[];
@@ -48,6 +52,10 @@ export interface CouncilResult {
     status: TaskStatus;
     error?: string;
     durationMs?: number;
+    /** v2.3 — typed kind from AdapterError when fork failed (R-DIAG-D.1). */
+    errorKind?: string;
+    /** v2.3 — actionable next step from AdapterError when fork failed. */
+    errorActionable?: string;
 }
 export declare class Council {
     private readonly adapters;

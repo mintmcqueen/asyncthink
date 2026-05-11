@@ -82,6 +82,8 @@ export async function resolveSkill(registry, input, ctx = {}) {
         filesGlob: skill.filesGlob,
         credentials: input.callerCredentials ?? skill.credentials,
         substitutedFrom,
+        mcpServers: skill.mcpServers,
+        preflight: skill.preflight,
     };
 }
 function composePrompt(promptBody, callerPrompt) {

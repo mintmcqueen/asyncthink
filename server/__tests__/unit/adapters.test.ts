@@ -181,7 +181,7 @@ describe('GeminiAdapter', () => {
     expect(out.text).toBe('PONG');
   });
 
-  it('returns empty when stdout is operational noise without JSON (F2)', async () => {
+  it('throws AdapterError(silent-failure) when stdout is operational noise without JSON (v2.3 F3-D.3)', async () => {
     const a = new GeminiAdapter();
     const exec = new RecordingExecutor([
       {
@@ -191,8 +191,11 @@ describe('GeminiAdapter', () => {
         durationMs: 1,
       },
     ]);
-    const out = await a.invoke({ prompt: 'PING' }, exec);
-    expect(out.text).toBe('');
+    await expect(a.invoke({ prompt: 'PING' }, exec)).rejects.toMatchObject({
+      name: 'AdapterError',
+      kind: 'silent-failure',
+      adapter: 'gemini',
+    });
   });
 
   it('handles JSON with nested braces and escaped strings (F2)', async () => {

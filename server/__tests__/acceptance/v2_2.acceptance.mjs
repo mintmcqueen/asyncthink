@@ -172,7 +172,7 @@ async function main() {
   try {
     header('Phase 1 — Initialization & tool registration');
     const initResult = await initServer(client);
-    expect('server reports v2.2.0', initResult.serverInfo.version === '2.2.0',
+    expect('server reports a v2.x version', /^2\.\d+\.\d+$/.test(initResult.serverInfo.version),
       `got ${initResult.serverInfo.version}`);
 
     const list = unwrap(await client.send('tools/list', {}));
@@ -328,10 +328,14 @@ async function main() {
     if (syncCall.error) {
       expect('sync delegate path returns either success or error (not async envelope)', true);
     } else {
-      const syncPayload = structured(syncCall.result);
-      expect('sync delegate response carries threadId, not taskId',
-        typeof syncPayload?.threadId === 'string' && !syncPayload?.taskId,
-        JSON.stringify(syncPayload).slice(0, 200));
+      // v2.3: sync delegate may now return an isError envelope (typed
+      // AdapterError) instead of a DelegateResponse. The contract under test
+      // is that sync NEVER returns the async {taskId} envelope.
+      const syncPayload = syncCall.result?.structuredContent;
+      const isAsyncShape = typeof syncPayload?.taskId === 'string' && !syncPayload?.threadId;
+      expect('sync delegate response is not the async {taskId} envelope',
+        !isAsyncShape,
+        `got: ${JSON.stringify(syncPayload ?? syncCall.result).slice(0, 200)}`);
     }
 
     header('Phase 12 — Audit log captures task lifecycle events (R1-D.1)');

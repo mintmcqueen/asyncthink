@@ -72,6 +72,16 @@ export interface DelegateRequest {
   credentials?: string;
   /** Owner principal; null in v2.2 single-tenant local. */
   principal?: string | null;
+  /**
+   * v2.3 — additive MCP-server allowlist for the adapter spawn (F3-D.2). Merged
+   * with the adapter's manifest default. Skills CANNOT remove servers.
+   */
+  mcpServers?: string[];
+  /**
+   * v2.3 — auth pre-flight opt-in (R-DIAG-D.4). When 'auth', runs a local
+   * probe BEFORE allocating a task row. Only applies in async mode.
+   */
+  preflight?: 'auth' | 'none';
 }
 
 export interface DelegateResponse {
@@ -254,7 +264,10 @@ export class Delegate {
       credentials: req.credentials,
       threadId: req.threadId,
       skill: req.skill,
-    });
+      // v2.3 (F3-D.2, R-DIAG-D.4) — forward additive allowlist + preflight opt-in.
+      ...(req.mcpServers !== undefined && { mcpServers: req.mcpServers }),
+      ...(req.preflight !== undefined && { preflight: req.preflight }),
+    } as Parameters<TaskExecutor['start']>[0]);
     return {
       taskId: state.taskId,
       adapter: state.adapter,

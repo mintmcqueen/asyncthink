@@ -15,6 +15,7 @@
 
 import { randomUUID } from 'crypto';
 import type { Adapter } from '../core/adapter.js';
+import { AdapterError } from '../core/adapterError.js';
 import type { AuditLog } from '../core/auditLog.js';
 import type { Executor } from '../core/executor.js';
 import type { IntelligenceTier } from '../core/manifests.js';
@@ -39,6 +40,10 @@ export interface ForkRequest {
   parentThreadId: string;
   /** Thought number that spawned this fork. */
   thoughtNumber: number;
+  /** v2.3 — additive MCP-server allowlist (F3-D.2). */
+  mcpServers?: string[];
+  /** v2.3 — auth pre-flight opt-in (R-DIAG-D.4). Not yet wired through council path. */
+  preflight?: 'auth' | 'none';
 }
 
 export interface ChainStatus {
@@ -54,6 +59,10 @@ export interface CouncilResult {
   status: TaskStatus;
   error?: string;
   durationMs?: number;
+  /** v2.3 — typed kind from AdapterError when fork failed (R-DIAG-D.1). */
+  errorKind?: string;
+  /** v2.3 — actionable next step from AdapterError when fork failed. */
+  errorActionable?: string;
 }
 
 export class Council {
@@ -121,6 +130,8 @@ export class Council {
           files: req.files,
           intelligence: req.intelligence,
           model: req.model,
+          // v2.3 (F3-D.2) — additive MCP-server allowlist passes through.
+          mcpServers: req.mcpServers,
         },
         this.executor
       );
@@ -146,10 +157,21 @@ export class Council {
         error: result.exitCode !== 0 ? `exit code ${result.exitCode}` : undefined,
       });
     } catch (err) {
+      // v2.3 (F3-D.4 / R-DIAG-D.1): treat AdapterError-throwing adapters as
+      // typed failures. Persist kind + actionable into TaskState for the
+      // council aggregation surface.
       const message = err instanceof Error ? err.message : String(err);
+      let errorKind: string | undefined;
+      let errorActionable: string | undefined;
+      if (err instanceof AdapterError) {
+        errorKind = err.kind;
+        errorActionable = err.actionable;
+      }
       await this.taskStore.update(taskId, {
         status: 'failed',
         error: message,
+        errorKind,
+        errorActionable,
       });
       await this.auditLog?.record({
         kind: 'invoke',
@@ -281,5 +303,7 @@ function resultFromTask(
     status: state.status,
     error: state.error,
     durationMs: state.durationMs,
+    errorKind: state.errorKind,
+    errorActionable: state.errorActionable,
   };
 }

@@ -100,6 +100,40 @@ describe('JsonlAuditLog', () => {
     ]);
   });
 
+  // v2.3 (R5-D.5)
+  it('records task.terminated with terminatedAt, signal, exitCode', async () => {
+    const log = new JsonlAuditLog({ path });
+    await log.record({
+      kind: 'task.terminated',
+      taskId: 'tsk-1',
+      adapter: 'claude',
+      terminatedAt: '2026-04-29T00:00:00.000Z',
+      signal: 'SIGTERM',
+      exitCode: 143,
+    });
+    const lines = readFileSync(path, 'utf8').trim().split('\n');
+    const event = JSON.parse(lines[0]).event;
+    expect(event.kind).toBe('task.terminated');
+    expect(event.terminatedAt).toBe('2026-04-29T00:00:00.000Z');
+    expect(event.signal).toBe('SIGTERM');
+    expect(event.exitCode).toBe(143);
+  });
+
+  it('records task.terminated with signal: "orphaned" for v3 watchdog cases', async () => {
+    const log = new JsonlAuditLog({ path });
+    await log.record({
+      kind: 'task.terminated',
+      taskId: 'tsk-2',
+      adapter: 'codex',
+      terminatedAt: '2026-04-29T00:30:00.000Z',
+      signal: 'orphaned',
+    });
+    const lines = readFileSync(path, 'utf8').trim().split('\n');
+    const event = JSON.parse(lines[0]).event;
+    expect(event.kind).toBe('task.terminated');
+    expect(event.signal).toBe('orphaned');
+  });
+
   it('records model.substitute event with from/to/tier/reason', async () => {
     const log = new JsonlAuditLog({ path });
     await log.record({

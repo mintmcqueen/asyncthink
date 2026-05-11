@@ -22,6 +22,7 @@
 import { randomUUID } from 'crypto';
 import { dirname } from 'path';
 import type { Adapter, AdapterInvocation, AdapterResult } from '../../core/adapter.js';
+import { AdapterError, detectGeminiError } from '../../core/adapterError.js';
 import type { Executor } from '../../core/executor.js';
 import type { IntelligenceTier } from '../../core/manifests.js';
 import { resolveModel } from '../tierResolver.js';
@@ -31,6 +32,12 @@ const GEMINI_TIERS: Record<IntelligenceTier, string> = {
   med: 'gemini-2.5-flash',
   low: 'gemini-2.5-flash-lite',
 };
+
+/** v2.3 (F3-D.2): default MCP-server allowlist when manifest doesn't specify. */
+const DEFAULT_MCP_ALLOWLIST = ['sequentialthinking', 'context7'];
+
+/** v2.3 (F3-D.1): exact-match regex for the gemini-cli operational-noise prefix. */
+const NOISE_RESPONSE_RE = /^\s*MCP issues detected\.\s*Run \/mcp list for status\.\s*$/i;
 
 export class GeminiAdapter implements Adapter {
   readonly id = 'gemini' as const;
@@ -54,6 +61,7 @@ export class GeminiAdapter implements Adapter {
 
   async invoke(inv: AdapterInvocation, exec: Executor): Promise<AdapterResult> {
     const resolved = resolveModel(inv, this.tiers, this.defaultTier, { adapterId: this.id });
+    const mcpAllowlist = resolveMcpAllowlist(inv.mcpServers);
     const argv: string[] = [
       '-p',
       inv.prompt,
@@ -68,6 +76,11 @@ export class GeminiAdapter implements Adapter {
       '--skip-trust',
       '-m',
       resolved.model,
+      // v2.3 (F3-D.2): curated MCP-server allowlist. Passing an empty value
+      // would disable all servers; we always pass at least the default set so
+      // skill authors and callers can extend additively.
+      '--allowed-mcp-server-names',
+      mcpAllowlist.join(','),
     ];
     if (inv.files?.length) {
       const dirs = uniqueDirs(inv.files);
@@ -83,6 +96,41 @@ export class GeminiAdapter implements Adapter {
     });
 
     const text = parseGeminiJson(result.stdout);
+    const rawError = {
+      stdout: result.stdout,
+      stderr: result.stderr,
+      exitCode: result.exitCode,
+      durationMs: result.durationMs,
+    };
+
+    // v2.3 (F3-D.3): silent-failure throw when parser yields empty AND stdout
+    // matches the known noise signature exactly. This is the v2.2 playtest's
+    // failure mode — gemini-cli emitted only operational feedback with no
+    // model response.
+    if (
+      text === '' &&
+      result.exitCode === 0 &&
+      NOISE_RESPONSE_RE.test(result.stdout.trim())
+    ) {
+      throw new AdapterError({
+        kind: 'silent-failure',
+        adapter: this.id,
+        model: resolved.model,
+        summary: 'gemini-cli emitted no parseable response (operational noise only)',
+        actionable:
+          'Check ~/.gemini/settings.json for unhealthy MCP servers, or pin a different intelligence tier. ' +
+          'See dev/research/v2-3-R1-gemini-diagnosis.md.',
+        raw: rawError,
+      });
+    }
+
+    // v2.3 (R-DIAG-D.2): on non-zero exit, run the gemini detector. Throw on
+    // a known failure shape; otherwise fall through and let the caller see
+    // the exit code via AdapterResult.
+    if (result.exitCode !== 0) {
+      const err = detectGeminiError(rawError, resolved.model);
+      if (err) throw err;
+    }
 
     return {
       text,
@@ -92,6 +140,17 @@ export class GeminiAdapter implements Adapter {
       durationMs: result.durationMs,
     };
   }
+}
+
+/**
+ * Merge caller's `mcpServers` (per-invocation override / skill extension) with
+ * the gemini default allowlist. Additive only — caller cannot remove a default.
+ * (F3-D.2)
+ */
+function resolveMcpAllowlist(callerServers: string[] | undefined): string[] {
+  const set = new Set<string>(DEFAULT_MCP_ALLOWLIST);
+  if (callerServers) for (const s of callerServers) if (s.trim()) set.add(s.trim());
+  return [...set];
 }
 
 function uniqueDirs(files: string[]): string[] {
@@ -132,6 +191,16 @@ function parseGeminiJson(stdout: string): string {
       error?: { message?: unknown };
     };
     if (typeof obj.response === 'string' && obj.response.length > 0) {
+      // v2.3 (F3-D.1): if the response literally equals the known operational-noise
+      // prefix, drop it. This guards against the v2.2 playtest's silent-failure mode
+      // where gemini-cli's UserFeedback subscriber polluted the response stream.
+      if (NOISE_RESPONSE_RE.test(obj.response.trim())) {
+        console.error(
+          '[Adapter:gemini] Discarding response that matched the known operational-noise signature; ' +
+            'gemini-cli likely emitted UserFeedback into the response stream. Returning empty.'
+        );
+        return '';
+      }
       return obj.response;
     }
     if (obj.error && typeof obj.error.message === 'string') {

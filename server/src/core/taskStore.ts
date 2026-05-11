@@ -73,6 +73,10 @@ export interface TaskState {
   substitutedFrom?: string;
   /** v2.2 — exit code from the adapter result. */
   exitCode?: number;
+  /** v2.3 — typed error kind from AdapterError (R-DIAG-D.1). */
+  errorKind?: string;
+  /** v2.3 — one-sentence actionable next step from AdapterError (R-DIAG-D.1). */
+  errorActionable?: string;
 }
 
 export interface TaskStore {
@@ -86,8 +90,12 @@ export interface TaskStore {
   byStatus(status: TaskStatus): Promise<TaskState[]>;
   /** Remove a task; safe to call on absent ids. */
   delete(id: string): Promise<void>;
-  /** Mark orphaned tasks (PIDs that no longer exist) as 'failed'. Returns ids cleaned. */
-  cleanupStale(): Promise<string[]>;
+  /**
+   * Mark orphaned tasks (PIDs that no longer exist) as 'failed'. Returns ids cleaned.
+   * v2.3: optional `skip` set protects tasks that are still being cleaned up
+   * (R5-D.3); the store still force-deletes past the 30m hard ceiling (R5-D.4).
+   */
+  cleanupStale(opts?: { skip?: Set<string> }): Promise<string[]>;
   /** v2.2 — find non-terminal tasks by `(idempotencyKey, principal)`. (R-DUR-D.3) */
   findByIdempotencyKey?(key: string, principal: string | null): Promise<TaskState | undefined>;
   /** v2.2 — list every task (for executor list + sweep). */

@@ -36,6 +36,13 @@ export const SWEEP_TTL_MS = {
     failed: 10 * 60_000,
     cancelled: 5 * 60_000,
 };
+/**
+ * v2.3 (R5-D.4): hard ceiling on the "skip while subprocess is cancelling"
+ * protection. Past this age, the sweeper force-deletes the cancelled task
+ * even if its subprocess hasn't confirmed exit (and the executor will emit
+ * `task.terminated` with `signal: 'orphaned'`).
+ */
+export const CANCELLING_HARD_CEILING_MS = 30 * 60_000;
 export class FsTaskStore {
     rootDir;
     mem = new Map();
@@ -112,9 +119,15 @@ export class FsTaskStore {
     /**
      * Reap tasks whose `lastUpdatedAt` (or `startTime` fallback) exceeds the
      * per-category TTL. Removes from memory and disk. Returns reaped ids.
+     *
+     * v2.3 (R5-D.3): `opts.skip` protects in-flight-cancelling tasks from
+     * deletion while their subprocess hasn't confirmed exit. Skipped tasks are
+     * still subject to the hard ceiling (R5-D.4) — past 30 minutes in the
+     * skip set, the sweeper force-deletes anyway.
      */
-    async cleanupStale() {
+    async cleanupStale(opts = {}) {
         const now = this.now().getTime();
+        const skip = opts.skip;
         const reaped = [];
         for (const t of [...this.mem.values()]) {
             const ttl = SWEEP_TTL_MS[t.status] ?? SWEEP_TTL_MS.completed;
@@ -122,10 +135,17 @@ export class FsTaskStore {
             if (!ts)
                 continue;
             const age = now - new Date(ts).getTime();
-            if (age >= ttl) {
-                await this.delete(t.id);
-                reaped.push(t.id);
+            if (age < ttl)
+                continue;
+            if (skip?.has(t.id)) {
+                // Honor the skip UNLESS we've hit the hard ceiling.
+                if (age < CANCELLING_HARD_CEILING_MS)
+                    continue;
+                // Past the ceiling: force-delete. Caller (executor) will see the id in
+                // the return list and emit `task.terminated` with signal: 'orphaned'.
             }
+            await this.delete(t.id);
+            reaped.push(t.id);
         }
         return reaped;
     }

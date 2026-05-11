@@ -13,6 +13,7 @@
  * the chain's tasks from the store.
  */
 import { randomUUID } from 'crypto';
+import { AdapterError } from '../core/adapterError.js';
 export class Council {
     adapters;
     threadStore;
@@ -72,6 +73,8 @@ export class Council {
                 files: req.files,
                 intelligence: req.intelligence,
                 model: req.model,
+                // v2.3 (F3-D.2) — additive MCP-server allowlist passes through.
+                mcpServers: req.mcpServers,
             }, this.executor);
             await this.threadStore.append(childThreadId, {
                 ts: new Date().toISOString(),
@@ -96,10 +99,21 @@ export class Council {
             });
         }
         catch (err) {
+            // v2.3 (F3-D.4 / R-DIAG-D.1): treat AdapterError-throwing adapters as
+            // typed failures. Persist kind + actionable into TaskState for the
+            // council aggregation surface.
             const message = err instanceof Error ? err.message : String(err);
+            let errorKind;
+            let errorActionable;
+            if (err instanceof AdapterError) {
+                errorKind = err.kind;
+                errorActionable = err.actionable;
+            }
             await this.taskStore.update(taskId, {
                 status: 'failed',
                 error: message,
+                errorKind,
+                errorActionable,
             });
             await this.auditLog?.record({
                 kind: 'invoke',
@@ -230,5 +244,7 @@ function resultFromTask(state, forkId, _parentThreadId) {
         status: state.status,
         error: state.error,
         durationMs: state.durationMs,
+        errorKind: state.errorKind,
+        errorActionable: state.errorActionable,
     };
 }

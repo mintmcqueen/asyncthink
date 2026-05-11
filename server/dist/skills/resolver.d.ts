@@ -32,6 +32,10 @@ export interface ResolvedSkill {
     credentials?: string;
     /** v2.2 — substituted-from id (R6b-D.2) when skill-pin substitution kicked in. */
     substitutedFrom?: string;
+    /** v2.3 — additive MCP-server allowlist from skill frontmatter (F3-D.2). */
+    mcpServers?: string[];
+    /** v2.3 — auth pre-flight opt-in from skill frontmatter (R-DIAG-D.4). */
+    preflight?: 'auth' | 'none';
 }
 export interface SkillResolutionInput {
     skill: string;

@@ -33,7 +33,13 @@ export declare class LocalSubprocessExecutor implements Executor {
     /**
      * Cancel a running task by id (R-DUR-D.5). Best-effort: if the subprocess
      * has not yet spawned, the cancellation is recorded and applied as soon
-     * as the spawn happens. If already terminated, no-op.
+     * as the spawn happens. If already terminated, the optional `onExit`
+     * callback fires immediately with `null` signal + undefined exit code.
+     *
+     * v2.3 (R5-D.2): optional `onExit` callback fires when the subprocess
+     * actually exits (or immediately if no subprocess is running). Lets the
+     * TaskExecutor emit `task.terminated` audit events with confirmed exit
+     * signal + code.
      */
-    cancel(taskId: string): void;
+    cancel(taskId: string, onExit?: (code: number | null, signal: NodeJS.Signals | null) => void): void;
 }

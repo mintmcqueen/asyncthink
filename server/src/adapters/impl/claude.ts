@@ -19,6 +19,7 @@
 
 import { randomUUID } from 'crypto';
 import type { Adapter, AdapterInvocation, AdapterResult } from '../../core/adapter.js';
+import { detectClaudeError } from '../../core/adapterError.js';
 import type { Executor } from '../../core/executor.js';
 import type { IntelligenceTier } from '../../core/manifests.js';
 import { resolveModel } from '../tierResolver.js';
@@ -67,6 +68,22 @@ export class ClaudeAdapter implements Adapter {
       env: { ...process.env, ...(inv.env ?? {}) } as Record<string, string>,
       timeoutMs: inv.timeoutMs ?? this.defaultTimeoutMs,
     });
+
+    // v2.3 (R-DIAG-D.2): run detector for known failure shapes. Claude is
+    // unusual in that its rate-limit and auth errors arrive as English text on
+    // stdout/stderr (no JSON envelope), often with exitCode 0 OR 1 depending on
+    // the failure mode. Run the detector regardless of exitCode; the detector
+    // returns null on non-failure shapes.
+    const err = detectClaudeError(
+      {
+        stdout: result.stdout,
+        stderr: result.stderr,
+        exitCode: result.exitCode,
+        durationMs: result.durationMs,
+      },
+      resolved.model
+    );
+    if (err) throw err;
 
     return {
       text: result.stdout,

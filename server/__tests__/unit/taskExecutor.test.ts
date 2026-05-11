@@ -456,3 +456,112 @@ describe('LocalInProcessTaskExecutor — TTL sweep (R-DUR-D.4)', () => {
     expect(r2).toContain('workTask');
   });
 });
+
+// v2.3 — cancellation refinement (R5-D.2, R5-D.3, R5-D.5) + AdapterError persistence
+describe('LocalInProcessTaskExecutor — v2.3 cancellation refinement', () => {
+  it('cancel emits task.cancel audit event then state flips immediately', async () => {
+    const audited: { kind: string; taskId?: string }[] = [];
+    const auditLog = {
+      async record(event: { kind: string; taskId?: string }) {
+        audited.push({ kind: event.kind, taskId: event.taskId });
+      },
+    };
+    const slow = new FakeAdapter('claude', () => new Promise<AdapterResult>(() => {}));
+    const lookup = {
+      get: (id: string) => (id === 'claude' ? slow : undefined),
+      list: () => [slow as never],
+    };
+    const taskStore = new FsTaskStore({ rootDir: tmp });
+    const exec = new LocalInProcessTaskExecutor({
+      adapters: lookup,
+      executor: noopExec,
+      taskStore,
+      auditLog,
+    });
+    const s = await exec.start({ adapter: 'claude', prompt: 'p' });
+    const cancelled = await exec.cancel(s.taskId);
+    expect(cancelled.status).toBe('cancelled');
+    // Both task.cancel and task.terminated should have been emitted; terminated
+    // fires immediately because there's no real subprocess (noopExec).
+    expect(audited.some((a) => a.kind === 'task.cancel' && a.taskId === s.taskId)).toBe(true);
+    expect(audited.some((a) => a.kind === 'task.terminated' && a.taskId === s.taskId)).toBe(true);
+  });
+});
+
+// v2.3 (R-DIAG-D.1, R-DIAG-D.2) — AdapterError persistence
+describe('LocalInProcessTaskExecutor — AdapterError persistence', () => {
+  it('persists errorKind + errorActionable on TaskState when adapter throws AdapterError', async () => {
+    const { AdapterError } = await import('../../src/core/adapterError.js');
+    const broken = new FakeAdapter('claude', () => {
+      throw new AdapterError({
+        kind: 'auth',
+        adapter: 'claude',
+        summary: 'mock auth failure',
+        actionable: 'mock-fix',
+      });
+    });
+    const lookup = {
+      get: (id: string) => (id === 'claude' ? broken : undefined),
+      list: () => [broken as never],
+    };
+    const taskStore = new FsTaskStore({ rootDir: tmp });
+    const exec = new LocalInProcessTaskExecutor({
+      adapters: lookup,
+      executor: noopExec,
+      taskStore,
+    });
+    const s = await exec.start({ adapter: 'claude', prompt: 'p' });
+    const final = await exec.result(s.taskId);
+    expect(final.status).toBe('failed');
+    expect(final.error).toContain('mock auth failure');
+    // Inspect the raw TaskState to confirm errorKind/errorActionable
+    const raw = await taskStore.get(s.taskId);
+    expect(raw?.errorKind).toBe('auth');
+    expect(raw?.errorActionable).toBe('mock-fix');
+  });
+});
+
+// v2.3 (R-DIAG-D.4) — opt-in preflight gate
+describe('LocalInProcessTaskExecutor — preflight auth', () => {
+  it('preflight: auth fails fast on gemini with empty env (no GEMINI_API_KEY)', async () => {
+    const a = new FakeAdapter('gemini', () => ({
+      text: 'ok',
+      sessionId: 's',
+      raw: null,
+      exitCode: 0,
+      durationMs: 1,
+    }));
+    const lookup = {
+      get: (id: string) => (id === 'gemini' ? a : undefined),
+      list: () => [a as never],
+    };
+    const taskStore = new FsTaskStore({ rootDir: tmp });
+    const exec = new LocalInProcessTaskExecutor({
+      adapters: lookup,
+      executor: noopExec,
+      taskStore,
+    });
+    // Save and clear gemini env to force probe failure.
+    const oldKey = process.env.GEMINI_API_KEY;
+    const oldGoog = process.env.GOOGLE_API_KEY;
+    delete process.env.GEMINI_API_KEY;
+    delete process.env.GOOGLE_API_KEY;
+    try {
+      await expect(
+        exec.start({
+          adapter: 'gemini',
+          prompt: 'p',
+          // Cast to allow test-only field; the type is loose at the boundary.
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          ...({ preflight: 'auth' } as any),
+        })
+      ).rejects.toMatchObject({ kind: 'auth' });
+      // No task row should have been created.
+      const tasks = await taskStore.list?.();
+      expect(tasks?.length ?? 0).toBe(0);
+    } finally {
+      if (oldKey !== undefined) process.env.GEMINI_API_KEY = oldKey;
+      if (oldGoog !== undefined) process.env.GOOGLE_API_KEY = oldGoog;
+    }
+  });
+});

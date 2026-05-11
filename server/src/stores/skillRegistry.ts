@@ -37,6 +37,8 @@ interface RawFrontmatter {
   timeout_ms?: unknown;
   description?: unknown;
   credentials?: unknown;
+  mcp_servers?: unknown;
+  preflight?: unknown;
 }
 
 const VALID_TIERS = new Set(['high', 'med', 'low']);
@@ -168,6 +170,9 @@ async function loadSkillFile(
       ? (fm.intelligence as 'high' | 'med' | 'low')
       : undefined;
   const model = typeof fm.model === 'string' ? fm.model : undefined;
+  const mcpServers = parseStringList(fm.mcp_servers);
+  const preflight =
+    fm.preflight === 'auth' || fm.preflight === 'none' ? fm.preflight : undefined;
   return {
     name,
     adapter: fm.adapter,
@@ -180,7 +185,33 @@ async function loadSkillFile(
     source,
     credentials: typeof fm.credentials === 'string' ? fm.credentials : undefined,
     pinsModel: model ?? null,
+    mcpServers,
+    preflight,
   };
+}
+
+/**
+ * Parse a YAML-style inline list field:
+ *   mcp_servers: [foo, bar, "baz"]
+ *
+ * Returns undefined if the field is absent. Returns [] if explicitly empty.
+ * The parseScalar path stores the raw string body verbatim (e.g.
+ * "[foo, bar]"); this helper extracts the bracketed comma-separated tokens.
+ */
+function parseStringList(value: unknown): string[] | undefined {
+  if (value === undefined) return undefined;
+  if (Array.isArray(value)) {
+    return value.filter((x): x is string => typeof x === 'string');
+  }
+  if (typeof value !== 'string') return undefined;
+  const s = value.trim();
+  if (!s.startsWith('[') || !s.endsWith(']')) return undefined;
+  const inner = s.slice(1, -1).trim();
+  if (!inner) return [];
+  return inner
+    .split(',')
+    .map((tok) => tok.trim().replace(/^['"]|['"]$/g, ''))
+    .filter((tok) => tok.length > 0);
 }
 
 interface ParsedDocument {
