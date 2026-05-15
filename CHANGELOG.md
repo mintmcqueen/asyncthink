@@ -10,6 +10,21 @@ All notable changes to AsyncThink are documented here. The format follows [Keep 
 - Set plugin and marketplace author to `mintmcqueen`.
 - GitHub default branch set to `develop` so plugin installs pull v2 code by default.
 
+## [2.3.2] — 2026-05-15
+
+Reinstall-script fix-pack. Two bugs surfaced when restarting Claude Code post-v2.3.1: (a) `claude plugin install` no-ops on existing bookmark instead of refreshing; (b) `claude plugin update` (the actual refresh command) doesn't run `npm install` in the new cache dir, so the v2.3.1 MCP server failed to boot with `Cannot find package 'dotenv'`. Both fixes land in `server/scripts/reinstall.sh`.
+
+### Fixed
+- `server/scripts/reinstall.sh` step 4 now captures the `claude plugin install` output and detects the `"already installed"` no-op signature; falls back to `claude plugin update asyncthink@asyncthink-local` automatically. Previously the script reported success and the bookmark stayed pinned to the old version.
+- `server/scripts/reinstall.sh` gains step 6: reads `installPath` from `~/.claude/plugins/installed_plugins.json` and verifies `<installPath>/server/node_modules/` exists. If absent (the `update`-vs-`install` gap in the plugin manager), runs `npm install --omit=dev --ignore-scripts --silent` in the install path so the MCP server can actually boot post-restart.
+- Script renumbered to 7 steps to accommodate the new node_modules guard.
+
+### Migration
+- No code or schema changes. Just rerun `cd server && npm run reinstall` after pulling v2.3.2 to pick it up. Future updates use the corrected flow automatically.
+
+### Known gaps (v2.4 backlog)
+- Long-term, the right fix is to bundle deps into `dist/index.js` via `tsup` so `node_modules/` is unnecessary at runtime. v2.3.2 keeps the current architecture and patches the install flow; v2.4 should revisit bundling.
+
 ## [2.3.1] — 2026-05-15
 
 Review fix-pack from PR #5 (mintmcqueen). Four blockers + four high-impact gaps + several defensive polish items, all surfaced during code review of the v2.3.0 stack before merge.

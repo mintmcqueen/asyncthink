@@ -1,9 +1,16 @@
 #!/usr/bin/env bash
-# asyncthink v2.3 — npm run reinstall (R-DIST-D.1)
+# asyncthink — npm run reinstall
 #
 # Thin verifier for the marketplace upgrade flow. Does ONLY safe, idempotent
 # steps; never auto-commits, never auto-pushes. Branch-rotation methodology
 # stays in charge of git ops.
+#
+# v2.3.1 (R-DIST-D.1): introduced. Verifies version triple + runs install.
+# v2.3.2: two fixes:
+#   - "already installed" no-op falls back to `claude plugin update`.
+#   - Cache install path is checked for `server/node_modules/`; if absent
+#     (a known `update`-vs-`install` gap in the plugin manager), populate via
+#     `npm install --omit=dev --ignore-scripts` so the server actually boots.
 #
 # Usage (from repo root or anywhere):
 #   npm run reinstall              # delegates to this script via server/package.json
@@ -36,7 +43,7 @@ echo "Repo root: ${REPO_ROOT}"
 echo
 
 # ─── Step 1: version triple ───────────────────────────────────────────────
-echo "${BOLD}[1/6]${NC} Checking version triple..."
+echo "${BOLD}[1/7]${NC} Checking version triple..."
 
 MKT_VER=$(node -e "console.log(JSON.parse(require('fs').readFileSync('.claude-plugin/marketplace.json','utf8')).plugins[0].version)")
 PLUGIN_VER=$(node -e "console.log(JSON.parse(require('fs').readFileSync('.claude-plugin/plugin.json','utf8')).version)")
@@ -56,7 +63,7 @@ echo "${GREEN}✓ Version triple agrees: ${VERSION}${NC}"
 echo
 
 # ─── Step 2: git state (warning only) ─────────────────────────────────────
-echo "${BOLD}[2/6]${NC} Checking git state..."
+echo "${BOLD}[2/7]${NC} Checking git state..."
 
 if [ -n "$(git status --porcelain)" ]; then
   echo "${YELLOW}⚠ Working tree has uncommitted changes; install will use the pushed origin/develop tip${NC}"
@@ -71,7 +78,7 @@ fi
 echo
 
 # ─── Step 3: marketplace update ───────────────────────────────────────────
-echo "${BOLD}[3/6]${NC} Running: claude plugin marketplace update asyncthink-local"
+echo "${BOLD}[3/7]${NC} Running: claude plugin marketplace update asyncthink-local"
 if claude plugin marketplace update asyncthink-local; then
   echo "${GREEN}✓ Marketplace metadata refreshed${NC}"
 else
@@ -79,40 +86,91 @@ else
 fi
 echo
 
-# ─── Step 4: install ──────────────────────────────────────────────────────
-echo "${BOLD}[4/6]${NC} Running: claude plugin install asyncthink@asyncthink-local"
-if claude plugin install asyncthink@asyncthink-local; then
-  echo "${GREEN}✓ Plugin installed${NC}"
-else
-  echo "${RED}✗ Plugin install failed${NC}" >&2
+# ─── Step 4: install (with update fallback) ───────────────────────────────
+echo "${BOLD}[4/7]${NC} Running: claude plugin install asyncthink@asyncthink-local"
+# Capture output AND exit code so we can detect the "already installed" no-op
+# and fall back to `claude plugin update`. v2.3.2 fix.
+set +e
+INSTALL_OUT=$(claude plugin install asyncthink@asyncthink-local 2>&1)
+INSTALL_RC=$?
+set -e
+echo "${INSTALL_OUT}"
+
+if [ ${INSTALL_RC} -ne 0 ]; then
+  echo "${RED}✗ Plugin install failed (exit ${INSTALL_RC})${NC}" >&2
   exit 1
+fi
+
+# Detect the no-op signature. The plugin manager prints
+# "Plugin "<name>@<marketplace>" is already installed" when the install path
+# is a no-op (an existing bookmark is present). In that case we need an
+# explicit `claude plugin update` to actually pull the new version into the
+# bookmark.
+if echo "${INSTALL_OUT}" | grep -qiE 'already installed|already up.?to.?date'; then
+  echo "${YELLOW}⚠ Install was a no-op (bookmark already present). Falling back to update.${NC}"
+  echo "${BOLD}    Running: claude plugin update asyncthink@asyncthink-local${NC}"
+  if ! claude plugin update asyncthink@asyncthink-local; then
+    echo "${RED}✗ Plugin update failed${NC}" >&2
+    exit 1
+  fi
+  echo "${GREEN}✓ Plugin updated${NC}"
+else
+  echo "${GREEN}✓ Plugin installed${NC}"
 fi
 echo
 
 # ─── Step 5: verify bookmark ──────────────────────────────────────────────
-echo "${BOLD}[5/6]${NC} Reading installed bookmark..."
+echo "${BOLD}[5/7]${NC} Reading installed bookmark..."
 
 BOOKMARK="$HOME/.claude/plugins/installed_plugins.json"
+INSTALL_PATH=""
 if [ -f "${BOOKMARK}" ]; then
-  node -e "
+  # Capture installPath in addition to printing the entry so step 6 can use it.
+  read -r BOOK_VER INSTALL_PATH <<< "$(node -e "
     const b = JSON.parse(require('fs').readFileSync('${BOOKMARK}','utf8'));
     const entry = (b.plugins['asyncthink@asyncthink-local'] || [])[0];
     if (!entry) { console.error('No asyncthink@asyncthink-local entry found'); process.exit(1); }
-    console.log('  version:        ' + entry.version);
-    console.log('  installPath:    ' + entry.installPath);
-    console.log('  gitCommitSha:   ' + entry.gitCommitSha);
-    console.log('  installedAt:    ' + entry.installedAt);
-    if (entry.version !== '${VERSION}') {
-      console.error('${RED}⚠ Bookmark version (' + entry.version + ') does not match expected (${VERSION}). Did you push origin/develop?${NC}');
-    }
-  "
+    process.stdout.write(entry.version + ' ' + entry.installPath);
+  ")"
+  echo "  version:        ${BOOK_VER}"
+  echo "  installPath:    ${INSTALL_PATH}"
+  if [ "${BOOK_VER}" != "${VERSION}" ]; then
+    echo "${YELLOW}⚠ Bookmark version (${BOOK_VER}) does not match expected (${VERSION}). Did you push origin/develop?${NC}"
+  fi
 else
   echo "${YELLOW}⚠ No bookmark file at ${BOOKMARK} (unusual)${NC}"
 fi
 echo
 
-# ─── Step 6: restart reminder ─────────────────────────────────────────────
-echo "${BOLD}[6/6]${NC}"
+# ─── Step 6: ensure runtime deps in cache ─────────────────────────────────
+echo "${BOLD}[6/7]${NC} Checking runtime deps in install path..."
+
+if [ -n "${INSTALL_PATH}" ] && [ -d "${INSTALL_PATH}/server" ]; then
+  if [ -d "${INSTALL_PATH}/server/node_modules" ]; then
+    echo "${GREEN}✓ node_modules present${NC}"
+  else
+    # v2.3.2 fix: `claude plugin update` does NOT run `npm install` (unlike
+    # the first-install path), so the cache dir lacks runtime deps and the
+    # MCP server fails to boot ("Cannot find package 'dotenv'…"). Populate.
+    echo "${YELLOW}⚠ node_modules absent at ${INSTALL_PATH}/server/node_modules${NC}"
+    echo "    Plugin manager's update flow doesn't run npm install. Populating runtime deps..."
+    echo "${BOLD}    cd ${INSTALL_PATH}/server && npm install --omit=dev --ignore-scripts${NC}"
+    if (cd "${INSTALL_PATH}/server" && npm install --omit=dev --ignore-scripts --silent); then
+      echo "${GREEN}✓ Runtime deps installed${NC}"
+    else
+      echo "${RED}✗ npm install failed in ${INSTALL_PATH}/server${NC}" >&2
+      echo "${RED}   You'll need to install deps manually before restarting Claude Code:${NC}" >&2
+      echo "${RED}   cd ${INSTALL_PATH}/server && npm install --omit=dev --ignore-scripts${NC}" >&2
+      exit 1
+    fi
+  fi
+else
+  echo "${YELLOW}⚠ Could not determine installPath from bookmark; skipping deps check${NC}"
+fi
+echo
+
+# ─── Step 7: restart reminder ─────────────────────────────────────────────
+echo "${BOLD}[7/7]${NC}"
 echo "${BOLD}${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo "${BOLD}  Restart Claude Code now: exit and re-launch.  /clear is insufficient.${NC}"
 echo "${BOLD}${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
