@@ -16,6 +16,7 @@
  * cancelled 5m). Same 30s rate-limit on combined sweeps.
  */
 import { getTaskExecutor, getThreadStore } from '../app.js';
+import { cleanupCodexOverlay } from '../adapters/codexOverlay.js';
 const DEFAULT_IDLE_MS = 6 * 60 * 60 * 1000;
 let lastSweepAt = 0;
 const MIN_SWEEP_INTERVAL_MS = 30_000;
@@ -46,6 +47,11 @@ async function sweepBoth(idleMs, force) {
     let reapedTasks = [];
     try {
         closedThreads = await getThreadStore().sweepIdle(idleMs);
+        // v2.5.0 — reap any codex $CODEX_HOME overlays for the just-closed
+        // threads. Failure-isolated; no-op for non-codex threads.
+        for (const tid of closedThreads) {
+            await cleanupCodexOverlay(tid);
+        }
     }
     catch {
         // Sweeper failures must never break a tool call.

@@ -1,6 +1,6 @@
 {
   "name": "asyncthink",
-  "version": "2.4.0",
+  "version": "2.5.0",
   "description": "MCP server: sequential thinking + parallel competitor council + threaded delegation to subordinate model CLIs (read-only)",
   "license": "MIT",
   "type": "module",
@@ -16,6 +16,9 @@
     "watch": "tsc --watch",
     "test": "vitest run --coverage",
     "audit:runtime": "npm audit --omit=dev --audit-level=high",
+    "audit:supply-chain": "node scripts/audit-supply-chain.mjs > /dev/null",
+    "audit:supply-chain:report": "node scripts/audit-supply-chain.mjs",
+    "audit:supply-chain:refresh": "node scripts/refresh-ioc.mjs",
     "reinstall": "bash scripts/reinstall.sh",
     "cache:status": "bash scripts/cache-status.sh",
     "cache:prune": "bash scripts/cache-prune.sh"

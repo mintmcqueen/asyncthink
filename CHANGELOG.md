@@ -10,6 +10,109 @@ All notable changes to AsyncThink are documented here. The format follows [Keep 
 - Set plugin and marketplace author to `mintmcqueen`.
 - GitHub default branch set to `develop` so plugin installs pull v2 code by default.
 
+## [2.5.0] — 2026-05-15
+
+Codex MCP-allowlist enforcement + supply-chain IOC monitor. Two
+follow-ups from the v2.4 hardening cycle: (1) close the F3-D.2 gap
+where the codex adapter shipped a manifest `mcp.allowlist` field that
+was informational only, (2) catch compromised packages that `npm audit`
+misses or lags on by maintaining a locally-committed IOC list.
+
+### Added — codex MCP-allowlist enforcement (F3-D.2 close)
+- **`server/src/adapters/codexOverlay.ts`** — slim `$CODEX_HOME` overlay
+  materializer. Per-thread temp dir under `tmpdir()/asyncthink/codex-overlay/`
+  containing only the allowlisted `[mcp_servers.<name>]` tables from the
+  user's real `~/.codex/config.toml`. The codex CLI is then spawned with
+  `CODEX_HOME=<overlay>` so the subprocess sees ONLY the curated MCP set.
+- Default allowlist mirrors gemini: `["sequentialthinking", "context7"]`.
+  Skill / caller can extend additively via `mcpServers: [...]` on
+  `delegate` and `asyncthink` forks (same model as gemini in v2.3).
+- **Auth handling**: hardlinks `auth.json` from the real CODEX_HOME into
+  the overlay when present so token refresh propagates back. Env-var
+  auth (`OPENAI_API_KEY`) and macOS Keychain auth are orthogonal — no
+  state to copy.
+- **Persistence model**: one overlay per AsyncThink `threadId`, not per
+  spawn. Codex `resumeStrategy: 'native'` needs `sessions/<id>.jsonl`
+  continuity, which a per-spawn overlay would break.
+- **Cleanup**: reaped on every `threadStore.close()` call site
+  (Delegate, Council end-chain, executor cancel + terminal-runTask) +
+  the idle sweeper. Idempotent + best-effort.
+- New audit event: **`codex.overlay.materialize`** with `threadId`,
+  `overlayPath`, `allowedServers`, `emittedServers`, `sourceConfigPresent`,
+  `authLinked`. Answers "which MCP servers did this codex subprocess
+  have access to?" from the audit log alone.
+- Anchored to research: the apparent shortcut `-c 'mcp_servers={}'` is
+  **broken upstream** (TOML inline-empty-tables merge instead of replace —
+  [openai/codex#16045](https://github.com/openai/codex/issues/16045)).
+  The overlay is the only robust enforcement primitive until codex ships
+  a `--allowed-mcp-server-names` flag.
+
+### Added — supply-chain IOC monitor
+- **`server/scripts/ioc/compromised-packages.json`** (committed, 308 KB) —
+  2,345 unique compromised `name@version` tuples. Seeded from
+  `Cobenian/shai-hulud-detect` (MIT, 2,100+ entries aggregating Sept-2025
+  Qix chalk/debug + Shai-Hulud + Shai-Hulud 2.0 + axios + node-ipc +
+  Bitwarden + SAP cap-js + Mini Shai-Hulud TanStack) and the
+  `wiz-sec-public/wiz-research-iocs` Shai-Hulud 2.0 CSV (796 entries).
+- **`server/scripts/audit-supply-chain.mjs`** — 3-layer scanner:
+  (1) exact `name@version` match against the IOC Map over the lockfile's
+  `packages` field; (2) Bun-bootstrapper filename glob over `node_modules`
+  (`setup_bun.js`, `bun_environment.js`, `bw_setup.js` from Shai-Hulud 2.0
+  / Bitwarden / SAP campaigns); (3) install-lifecycle script presence
+  audit (warning only — our installs use `--ignore-scripts`). Exit 0
+  clean / 1 match / 2 missing list. Structured JSON to stdout, human
+  summary to stderr.
+- **`server/scripts/refresh-ioc.mjs`** — pulls Cobenian + Wiz feeds,
+  dedupes by `name@version`, writes deterministic sorted JSON.
+  Optional `--with-aikido` flag pulls the Aikido live feed (~125k npm
+  entries) to a separate gitignored `aikido-enrichment.json` for local
+  +long-tail typosquat coverage.
+- **Workflow scaffolding** for a weekly cron is included as a follow-up
+  (template at `.github/workflows/refresh-ioc.yml` in the source tree
+  but not committed in v2.5.0 — Anthropic's OAuth scope on `git push`
+  doesn't include `workflow`, so the file must be added with a token
+  that has the right scope). Manual refresh in the meantime:
+  `npm run audit:supply-chain:refresh`.
+- New npm scripts: `audit:supply-chain` (silent gate),
+  `audit:supply-chain:report` (verbose JSON to stdout),
+  `audit:supply-chain:refresh` (pull + bake).
+- Chained into `git-guard.test-cmd` pre-push: now runs
+  `audit:runtime → audit:supply-chain → npm test`.
+
+### Schema additions
+- `AdapterInvocation.threadId?: string` — AsyncThink-side thread id.
+  Distinct from `sessionId` (CLI continuation token). Used by codex
+  adapter to scope overlays.
+- `AuditEvent` adds `kind: 'codex.overlay.materialize'`.
+- `AdapterRegistry.withDefaults({auditLog?})` — optional auditLog
+  param so the codex adapter can emit overlay events.
+
+### Footprint
+- 292 tests (up from 261). New: 19 codex-overlay + 9 supply-chain + 3
+  threading regressions.
+- Zero new runtime deps. Two new dev scripts; no new packages.
+- IOC list adds ~308 KB to the repo (committed).
+
+### Migration
+- `npm run reinstall` after pull. The codex adapter starts enforcing
+  the manifest's `mcp.allowlist` immediately — if you had unhealthy
+  MCP servers configured for codex globally, asyncthink-spawned codex
+  subprocesses no longer inherit them. Other codex usages (running
+  codex directly, not through AsyncThink) are unaffected.
+- Skill files using `mcp_servers: [foo]` frontmatter already work
+  through the additive merge (v2.3 wired this for gemini; v2.5 makes
+  codex symmetric).
+
+### Open follow-ups (v2.6+)
+- `--ephemeral` codex mode for ephemeral overlay cleanup. v2.5 uses
+  persistent-per-thread overlays so codex native session resume works;
+  ephemeral mode is a future option for short-lived single-shot forks.
+- Integrity-hash cross-walk in the supply-chain scanner (lockfile
+  `sha512` vs IOC `sha256` — currently incompatible algorithms; needs
+  a re-fetch + re-hash pipeline).
+- Maintainer-change / registry-time-jump detection (network-bound,
+  separate `audit:supply-chain:remote` script).
+
 ## [2.4.0] — 2026-05-15
 
 Security hardening cycle. Triggered by a full dependency review against the 2025-2026 npm supply-chain compromise registry — chalk/debug (Sept 8 2025), Shai-Hulud worm (Sept 2025), Shai-Hulud 2.0 (Nov 24 2025 — 796 packages, 20M weekly downloads), axios (March 31 2026, 100M+ weekly downloads), TanStack + Mini Shai-Hulud (May 11-12 2026 — 170+ packages, dead-man's-switch wipes home dirs), node-ipc (May 14 2026 — 10M weekly downloads). Our installed versions were already past every compromise window, but the architectural defenses needed work: no lockfile committed, caret ranges resolving freshly, `npm install` instead of `npm ci`, and a vulnerable MCP SDK transitive in `@modelcontextprotocol/sdk@1.24.3`.

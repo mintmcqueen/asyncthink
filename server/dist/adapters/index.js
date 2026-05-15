@@ -18,11 +18,15 @@ export class AdapterRegistry {
     list() {
         return [...this.map.values()];
     }
-    static withDefaults() {
+    /**
+     * v2.5.0 — accept an optional auditLog so the codex adapter can emit
+     * `codex.overlay.materialize` events for observability of the F3-D.2 gate.
+     */
+    static withDefaults(opts = {}) {
         const r = new AdapterRegistry();
         r.register(new ClaudeAdapter());
         r.register(new GeminiAdapter());
-        r.register(new CodexAdapter());
+        r.register(new CodexAdapter({ auditLog: opts.auditLog }));
         return r;
     }
 }

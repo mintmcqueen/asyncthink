@@ -24,13 +24,14 @@ import { JsonlAuditLog } from './stores/jsonlAuditLog.js';
 import { Delegate } from './delegate/delegate.js';
 import { Council } from './asyncthink/council.js';
 import { AsyncThinkingServer } from './asyncthink/thinking.js';
-const adapters = AdapterRegistry.withDefaults();
 const manifestRegistry = new FsManifestRegistry();
 const executor = new LocalSubprocessExecutor();
 const threadStore = new JsonlThreadStore();
 const taskStore = new FsTaskStore();
 const skillRegistry = new FsSkillRegistry({ manifests: manifestRegistry });
 const auditLog = new JsonlAuditLog();
+// v2.5.0 — pass auditLog so CodexAdapter can emit codex.overlay.materialize.
+const adapters = AdapterRegistry.withDefaults({ auditLog });
 const taskExecutor = new LocalInProcessTaskExecutor({
     adapters,
     executor,

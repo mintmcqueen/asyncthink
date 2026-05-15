@@ -30,6 +30,7 @@ import { isTerminal as isTerminalTaskStatus } from '../core/taskStore.js';
 import { LocalSubprocessExecutor } from './localSubprocess.js';
 import { checkContextLimit, resolveModel } from '../adapters/tierResolver.js';
 import { detectAuthPath } from '../adapters/authPath.js';
+import { cleanupCodexOverlay } from '../adapters/codexOverlay.js';
 const TERMINAL_STATUSES = new Set([
     'completed',
     'failed',
@@ -294,6 +295,13 @@ export class LocalInProcessTaskExecutor {
             }
             catch {
                 /* not fatal */
+            }
+            // v2.5.0 — reap codex $CODEX_HOME overlay on cancel. Idempotent.
+            try {
+                await cleanupCodexOverlay(childThreadId);
+            }
+            catch {
+                /* best-effort */
             }
         }
         const fresh = await this.taskStore.get(taskId);
@@ -567,6 +575,9 @@ export class LocalInProcessTaskExecutor {
                 // v2.3.1 (B1) — async path must forward the additive allowlist too.
                 // Previously only the sync council path forwarded mcpServers.
                 mcpServers: req.mcpServers,
+                // v2.5.0 — threadId enables the codex adapter to scope its
+                // $CODEX_HOME overlay per AsyncThink thread (multi-turn safe).
+                threadId: childThreadId,
             }, exec);
             envelope = {
                 text: result.text,
@@ -689,6 +700,13 @@ export class LocalInProcessTaskExecutor {
             catch {
                 /* thread already closed or store unavailable; not fatal */
             }
+        }
+        // v2.5.0 — reap codex $CODEX_HOME overlay on terminal. Idempotent.
+        try {
+            await cleanupCodexOverlay(childThreadId);
+        }
+        catch {
+            /* best-effort */
         }
     }
     boundExecutor(taskId) {

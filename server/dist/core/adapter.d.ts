@@ -54,6 +54,14 @@ export interface AdapterInvocation {
      * better context than the conservative pre-flight estimate.
      */
     bypassRateLimit?: boolean;
+    /**
+     * v2.5.0 — AsyncThink-side thread identifier. Distinct from `sessionId`,
+     * which is the CLI's continuation token (e.g., codex `thread_id`). The
+     * codex adapter uses `threadId` to scope its per-thread `$CODEX_HOME`
+     * overlay so multi-turn resumes within the same thread reuse the same
+     * filtered MCP-server config. Other adapters may ignore.
+     */
+    threadId?: string;
 }
 export interface AdapterResult {
     /** Plain-text response from the subordinate. */

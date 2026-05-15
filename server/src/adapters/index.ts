@@ -6,6 +6,7 @@
  */
 
 import type { Adapter } from '../core/adapter.js';
+import type { AuditLog } from '../core/auditLog.js';
 import { ClaudeAdapter } from './impl/claude.js';
 import { GeminiAdapter } from './impl/gemini.js';
 import { CodexAdapter } from './impl/codex.js';
@@ -25,11 +26,15 @@ export class AdapterRegistry {
     return [...this.map.values()];
   }
 
-  static withDefaults(): AdapterRegistry {
+  /**
+   * v2.5.0 — accept an optional auditLog so the codex adapter can emit
+   * `codex.overlay.materialize` events for observability of the F3-D.2 gate.
+   */
+  static withDefaults(opts: { auditLog?: AuditLog } = {}): AdapterRegistry {
     const r = new AdapterRegistry();
     r.register(new ClaudeAdapter());
     r.register(new GeminiAdapter());
-    r.register(new CodexAdapter());
+    r.register(new CodexAdapter({ auditLog: opts.auditLog }));
     return r;
   }
 }

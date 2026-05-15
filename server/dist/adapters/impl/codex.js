@@ -37,11 +37,22 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import { detectCodexError } from '../../core/adapterError.js';
 import { resolveModel } from '../tierResolver.js';
+import { materializeCodexOverlay } from '../codexOverlay.js';
 const CODEX_TIERS = {
     high: 'gpt-5.5',
     med: 'gpt-5-codex',
     low: 'gpt-5-mini',
 };
+/** v2.5.0 (F3-D.2): default MCP-server allowlist for codex. Mirrors gemini. */
+const DEFAULT_MCP_ALLOWLIST = ['sequentialthinking', 'context7'];
+function resolveMcpAllowlist(callerServers) {
+    const set = new Set(DEFAULT_MCP_ALLOWLIST);
+    if (callerServers)
+        for (const s of callerServers)
+            if (s.trim())
+                set.add(s.trim());
+    return [...set];
+}
 export class CodexAdapter {
     id = 'codex';
     readOnly = true;
@@ -49,14 +60,45 @@ export class CodexAdapter {
     defaultTimeoutMs;
     tiers;
     defaultTier;
+    auditLog;
     constructor(opts = {}) {
         this.defaultTimeoutMs = opts.defaultTimeoutMs ?? 180_000;
         this.tiers = opts.tiers ?? CODEX_TIERS;
         this.defaultTier = opts.defaultTier ?? 'med';
+        this.auditLog = opts.auditLog;
     }
     async invoke(inv, exec) {
         const tmp = join(tmpdir(), `asyncthink-codex-${Date.now().toString(36)}-${randomUUID().slice(0, 8)}.txt`);
         const prompt = renderPrompt(inv);
+        // v2.5.0 (F3-D.2) — materialize a slim $CODEX_HOME overlay so the
+        // subordinate codex subprocess sees only the allowlisted MCP servers.
+        // Threading: scoped by `inv.threadId` (AsyncThink-side identifier) so
+        // multi-turn `codex exec resume <id>` calls within the same thread
+        // reuse the same overlay (codex resume requires sessions/ continuity).
+        // Fallback when `inv.threadId` is absent (legacy callers): mint an
+        // ephemeral id so the call still gets allowlist enforcement; the
+        // resulting overlay won't be reused on resume.
+        const overlayThreadId = inv.threadId ?? `ephemeral-${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`;
+        const allowed = resolveMcpAllowlist(inv.mcpServers);
+        const overlay = await materializeCodexOverlay({
+            threadId: overlayThreadId,
+            allowedServers: allowed,
+        });
+        if (this.auditLog) {
+            await this.auditLog
+                .record({
+                kind: 'codex.overlay.materialize',
+                threadId: overlayThreadId,
+                overlayPath: overlay.overlayPath,
+                allowedServers: allowed,
+                emittedServers: overlay.emittedServers,
+                sourceConfigPresent: overlay.sourceConfigPresent,
+                authLinked: overlay.authLinked,
+            })
+                .catch(() => {
+                /* audit log is failure-isolated; never throw */
+            });
+        }
         const argv = ['exec'];
         if (inv.sessionId) {
             argv.push('resume', inv.sessionId);
@@ -67,7 +109,11 @@ export class CodexAdapter {
             bin: 'codex',
             argv,
             cwd: inv.cwd ?? process.cwd(),
-            env: { ...process.env, ...(inv.env ?? {}) },
+            env: {
+                ...process.env,
+                ...(inv.env ?? {}),
+                CODEX_HOME: overlay.overlayPath,
+            },
             timeoutMs: inv.timeoutMs ?? this.defaultTimeoutMs,
         });
         // v2.3 (R-DIAG-D.2): on non-zero exit, run the codex detector for known
