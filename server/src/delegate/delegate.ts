@@ -31,6 +31,7 @@ import {
   CredentialsNotSupportedError,
 } from '../core/taskExecutor.js';
 import type { ThreadStore, ThreadTurn } from '../core/threadStore.js';
+import { cleanupCodexOverlay } from '../adapters/codexOverlay.js';
 import { resolveModel } from '../adapters/tierResolver.js';
 import type { LocalInProcessTaskExecutor } from '../exec/localInProcessTaskExecutor.js';
 
@@ -255,6 +256,8 @@ export class Delegate {
         // previously only Council.runFork was wired (sync forks), so async
         // delegate and sync delegate silently dropped the field.
         mcpServers: req.mcpServers,
+        // v2.5.0 — threadId for codex $CODEX_HOME overlay scoping.
+        threadId,
       },
       this.executor
     );
@@ -287,6 +290,9 @@ export class Delegate {
         threadId,
         adapter: adapter.id,
       });
+      // v2.5.0 — reap any codex $CODEX_HOME overlay scoped to this thread.
+      // Idempotent + best-effort; no-op for non-codex adapters.
+      await cleanupCodexOverlay(threadId);
     }
 
     return {

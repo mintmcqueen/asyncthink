@@ -15,6 +15,7 @@
 import { randomUUID } from 'crypto';
 import { AdapterError } from '../core/adapterError.js';
 import { resolveModel } from '../adapters/tierResolver.js';
+import { cleanupCodexOverlay } from '../adapters/codexOverlay.js';
 export class Council {
     adapters;
     threadStore;
@@ -124,6 +125,8 @@ export class Council {
                 model: req.model,
                 // v2.3 (F3-D.2) — additive MCP-server allowlist passes through.
                 mcpServers: req.mcpServers,
+                // v2.5.0 — threadId for codex $CODEX_HOME overlay scoping.
+                threadId: childThreadId,
             }, this.executor);
             // v2.3.1 (B2): consume the rate-limit slot only after invoke succeeds.
             if (rateLimitSlotPush)
@@ -277,6 +280,13 @@ export class Council {
                 threadId: t.threadId,
                 adapter: t.adapter,
             });
+            // v2.5.0 — reap codex $CODEX_HOME overlay for codex forks.
+            try {
+                await cleanupCodexOverlay(t.threadId);
+            }
+            catch {
+                /* best-effort */
+            }
         }
         // Prune tasks from the store.
         for (const r of results) {

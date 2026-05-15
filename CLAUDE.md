@@ -1,6 +1,6 @@
 # AsyncThink MCP Server — Developer Documentation
 
-> **Status:** v2.4.0 released. Security-hardening cycle in response to the 2025-2026 npm supply-chain wave (Qix chalk/debug Sept-2025; Shai-Hulud + Shai-Hulud 2.0; Mini Shai-Hulud TanStack/Mistral May-2026; axios March-2026; node-ipc May-14-2026). Changes: (1) **upgraded `@modelcontextprotocol/sdk` to ≥1.26.0** — closes CVE-2026-25536 (cross-client data leak via shared StreamableHTTPServerTransport) plus 10 transitive CVEs; (2) **dropped `chalk`, `dotenv`, `shx`** — inlined ANSI escapes in `thinking.ts` (3 call sites), deleted unused `dotenv` (zero imports), replaced `shx` with direct bash in `build` script; (3) **committed `package-lock.json`** so reinstalls pin exact transitive versions instead of resolving caret ranges freshly each time; (4) **`reinstall.sh` switched to `npm ci --omit=dev --ignore-scripts`** — frozen lockfile, no lifecycle scripts; (5) **pre-push hook chains `npm audit --omit=dev --audit-level=high`** before tests via `git-guard.test-cmd`. 189 packages total (down from 216), **0 vulnerabilities** (down from 11). v2.3.3: flexibility fix-pack — `authPath` override + `bypassRateLimit` + async-delegate thread close. v2.3.2: reinstall-script fixes. v2.3.1: PR #5 review fix-pack. v2.3.0: gemini parser hardening (F3), typed AdapterError envelope, auth pre-flight, auth-path-aware rate-limit advisories, curated MCP-server allowlist, cancellation post-exit confirmation. v2.0.0 onwards is the modular refactor; v1.1.9 git tag remains the historical pin for v1 behavior.
+> **Status:** v2.5.0 released. Two v2.4 follow-ups: (1) **codex MCP-allowlist enforcement** (F3-D.2 close) — codex spawned with `CODEX_HOME=<slim-overlay>` per AsyncThink threadId; overlay's `config.toml` contains only the allowlisted `[mcp_servers.<name>]` tables. Default allowlist `[sequentialthinking, context7]` matches gemini; skill/caller additive merge via `mcpServers: [...]`. Hardlinks `auth.json` from real `~/.codex` so token refresh propagates. Reaped on every thread close + idle sweep. New `codex.overlay.materialize` audit event. (2) **Supply-chain IOC monitor** — `npm run audit:supply-chain` walks the lockfile against a committed JSON of 2,345 known-bad `name@version` tuples (Cobenian + Wiz, refreshed weekly via GitHub Action), plus Bun-bootstrapper filename glob, plus install-script presence audit (warning). Chained into pre-push gate. Catches Shai-Hulud / Mini Shai-Hulud / axios / node-ipc / Bitwarden / SAP compromises the moment the IOC list is refreshed, independent of `npm audit`'s GHSA lag. v2.4.0: security-hardening cycle in response to the 2025-2026 npm supply-chain wave — upgraded `@modelcontextprotocol/sdk` to ≥1.26.0 (closes CVE-2026-25536), dropped `chalk`/`dotenv`/`shx`, committed `package-lock.json`, switched `reinstall.sh` to `npm ci --omit=dev --ignore-scripts`. 189 packages, 0 vulnerabilities. v2.3.3: flexibility fix-pack — `authPath` override + `bypassRateLimit` + async-delegate thread close. v2.3.2: reinstall-script fixes. v2.3.1: PR #5 review fix-pack. v2.3.0: gemini parser hardening (F3), typed AdapterError envelope, auth pre-flight, auth-path-aware rate-limit advisories, curated MCP-server allowlist, cancellation post-exit confirmation. v2.0.0 onwards is the modular refactor; v1.1.9 git tag remains the historical pin for v1 behavior.
 
 ## Quick install / update
 
@@ -283,7 +283,7 @@ Gemini and codex are spawned with a curated MCP-server allowlist instead of inhe
 
 **Per-adapter flag mapping:**
 - gemini: `--allowed-mcp-server-names <comma-list>` (verified against gemini-cli v0.39.x).
-- codex: v2.3 ships the manifest field but does NOT yet enforce at argv level (codex v0.125 has no flag-level allowlist; the field is informational until v2.4 adds a `$CODEX_HOME` override pattern).
+- codex: **enforced as of v2.5.0** via a slim `$CODEX_HOME` overlay (codex v0.125 has no flag-level allowlist; the apparent shortcut `-c 'mcp_servers={}'` is broken upstream per [openai/codex#16045](https://github.com/openai/codex/issues/16045)). On every spawn the codex adapter materializes a per-thread overlay at `tmpdir()/asyncthink/codex-overlay/<sanitized-threadId>/` containing `config.toml` with only the allowlisted `[mcp_servers.<name>]` tables, then spawns codex with `CODEX_HOME=<overlay>`. Hardlinks `auth.json` from the user's real `~/.codex` so token refresh propagates back. Reaped on every thread close + idle sweep. The overlay is per-thread (not per-spawn) so codex `resumeStrategy: 'native'` retains `sessions/<id>.jsonl` continuity for multi-turn resume. Emits a `codex.overlay.materialize` audit event with the allowlist + source-config-present + auth-linked flags. Implementation: `server/src/adapters/codexOverlay.ts`.
 
 ## Auth-path-aware rate-limit advisories (v2.3 R6a-D.4)
 
@@ -315,6 +315,24 @@ v3 will ship two profile resolvers:
 
 This contract lets users plan multi-tenant or per-task credential isolation without taking a runtime dependency on it today.
 
+## Supply-chain IOC monitor (v2.5.0)
+
+`npm run audit:supply-chain` walks `server/package-lock.json` against a committed list of 2,345 known-compromised `name@version` tuples (`server/scripts/ioc/compromised-packages.json`). Closes the lag between "compromised version published to npm" and "advisory entered in the GitHub DB that `npm audit` queries" — a window that, in the 2025-2026 attack wave, has run hours to days.
+
+**Detection layers:**
+1. **Exact `name@version` match** against the IOC Map → failure (exit 1).
+2. **Bun-bootstrapper filename glob** over `node_modules` (`setup_bun.js`, `bun_environment.js`, `bw_setup.js` — IOCs from Shai-Hulud 2.0, Bitwarden CLI, SAP cap-js campaigns) → failure (exit 1).
+3. **Install-lifecycle script presence** in installed `package.json` files → warning (not failure; `--ignore-scripts` defang already neutralizes execution, but the diary entry is useful).
+
+**Sources** (`server/scripts/ioc/SOURCES.md`):
+- `Cobenian/shai-hulud-detect` (MIT) — 2,112 entries; aggregates Sept-2025 Qix chalk/debug + Shai-Hulud + Shai-Hulud 2.0 + axios + node-ipc + Bitwarden + SAP cap-js + Mini Shai-Hulud TanStack.
+- `wiz-sec-public/wiz-research-iocs` Shai-Hulud 2.0 CSV — 795 entries.
+- Optional local enrichment: Aikido feed (~125k entries, MALWARE-only) via `npm run audit:supply-chain:refresh -- --with-aikido`. Written to `scripts/ioc/aikido-enrichment.json` (gitignored). Audit picks it up automatically when present.
+
+**Refresh cadence:** weekly Monday 03:00 UTC via `.github/workflows/refresh-ioc.yml` which runs the refresh script and PRs the diff. Pre-push hook reads ONLY the committed file — never hits the network. On-incident: `npm run audit:supply-chain:refresh` manually.
+
+**Pre-push integration:** `git config git-guard.test-cmd "(cd server && npm run audit:runtime && npm run audit:supply-chain && npm test --silent)"`. The supply-chain gate runs after `npm audit` (which covers GHSA-listed CVEs) and before tests.
+
 ## Audit log
 
 `JsonlAuditLog` (`server/src/stores/jsonlAuditLog.ts`) records every adapter invocation, thread lifecycle, task lifecycle, and model-substitution event to `~/.local/share/asyncthink/audit.jsonl`. Each line is a JSON object: `{ts, pid, event}`. Recognized `event.kind` values:
@@ -328,6 +346,7 @@ This contract lets users plan multi-tenant or per-task credential isolation with
 | `task.cancel` / `task.expire` (v2.2) | `taskId, adapter, reason?` | tasks_cancel / sweeper |
 | `task.terminated` (v2.3) | `taskId, adapter, terminatedAt, signal?, exitCode?` | Paired 1:1 with `task.cancel`; emitted from the subprocess `close` listener (or immediately if no subprocess existed). Reserves `signal: 'orphaned'` for v3 watchdog. |
 | `task.bypass_rate_limit` (v2.3.3) | `taskId, adapter, authPath?, reason?` | Caller passed `bypassRateLimit: true` on `delegate`/`asyncthink` fork (or skill frontmatter `bypass_rate_limit: true`). Reasons: `caller-opt-out` (async), `sync-delegate-opt-out`, `council-fork-opt-out`. |
+| `codex.overlay.materialize` (v2.5.0) | `threadId, overlayPath, allowedServers[], emittedServers, sourceConfigPresent, authLinked` | Emitted on every codex spawn that uses the `$CODEX_HOME` overlay (F3-D.2). Answers "which MCP servers did this codex subprocess have access to?". |
 | `model.substitute` (v2.2) | `adapter, from, to, tier, reason` | SkillResolver R6b-D.2 substitution |
 | `cred.use` (reserved) | (deferred to v3 per R-CRED-D.4) | — |
 

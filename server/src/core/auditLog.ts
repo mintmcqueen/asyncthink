@@ -94,6 +94,19 @@ export type AuditEvent =
       adapter: string;
       authPath?: string;
       reason?: string;
+    }
+  // v2.5.0 — codex MCP-allowlist enforcement via $CODEX_HOME overlay (F3-D.2).
+  // Emitted on every codex spawn that uses the overlay. Records which
+  // servers were emitted into the slim config.toml so operators can answer
+  // "which MCP servers did this codex subprocess have access to?".
+  | {
+      kind: 'codex.overlay.materialize';
+      threadId: string;
+      overlayPath: string;
+      allowedServers: string[];
+      emittedServers: number;
+      sourceConfigPresent: boolean;
+      authLinked: boolean;
     };
 
 export interface AuditLog {

@@ -19,6 +19,7 @@
  */
 import { randomUUID } from 'crypto';
 import { CredentialsNotSupportedError, } from '../core/taskExecutor.js';
+import { cleanupCodexOverlay } from '../adapters/codexOverlay.js';
 import { resolveModel } from '../adapters/tierResolver.js';
 const REMINDER_OPEN = 'Thread is open. Call delegate_close({threadId}) when this conversation is done. ' +
     'Idle threads are auto-swept after 6 hours.';
@@ -141,6 +142,8 @@ export class Delegate {
             // previously only Council.runFork was wired (sync forks), so async
             // delegate and sync delegate silently dropped the field.
             mcpServers: req.mcpServers,
+            // v2.5.0 — threadId for codex $CODEX_HOME overlay scoping.
+            threadId,
         }, this.executor);
         // v2.3.1 (B2): consume the rate-limit slot only after invoke succeeds.
         if (rateLimitSlotPush)
@@ -169,6 +172,9 @@ export class Delegate {
                 threadId,
                 adapter: adapter.id,
             });
+            // v2.5.0 — reap any codex $CODEX_HOME overlay scoped to this thread.
+            // Idempotent + best-effort; no-op for non-codex adapters.
+            await cleanupCodexOverlay(threadId);
         }
         return {
             threadId,

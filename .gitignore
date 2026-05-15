@@ -31,3 +31,8 @@ npm-debug.log*
 
 # Research scratch (R2-D ruling: dev/research is personal scratch, not committed)
 dev/research/
+
+# Optional Aikido IOC enrichment — local-only, populated by:
+#   npm run audit:supply-chain:refresh -- --with-aikido
+# License of Aikido feed data is not separately published; we don't redistribute.
+server/scripts/ioc/aikido-enrichment.json

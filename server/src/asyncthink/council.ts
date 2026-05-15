@@ -22,6 +22,7 @@ import type { IntelligenceTier, ManifestRegistry } from '../core/manifests.js';
 import type { TaskState, TaskStatus, TaskStore } from '../core/taskStore.js';
 import type { ThreadStore } from '../core/threadStore.js';
 import { resolveModel } from '../adapters/tierResolver.js';
+import { cleanupCodexOverlay } from '../adapters/codexOverlay.js';
 
 /**
  * v2.3.1 (H1+H2): Council gates injected from the executor singleton so sync
@@ -214,6 +215,8 @@ export class Council {
           model: req.model,
           // v2.3 (F3-D.2) — additive MCP-server allowlist passes through.
           mcpServers: req.mcpServers,
+          // v2.5.0 — threadId for codex $CODEX_HOME overlay scoping.
+          threadId: childThreadId,
         },
         this.executor
       );
@@ -362,6 +365,12 @@ export class Council {
         threadId: t.threadId,
         adapter: t.adapter,
       });
+      // v2.5.0 — reap codex $CODEX_HOME overlay for codex forks.
+      try {
+        await cleanupCodexOverlay(t.threadId);
+      } catch {
+        /* best-effort */
+      }
     }
     // Prune tasks from the store.
     for (const r of results) {

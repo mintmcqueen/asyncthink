@@ -79,6 +79,14 @@ export type AuditEvent = {
     adapter: string;
     authPath?: string;
     reason?: string;
+} | {
+    kind: 'codex.overlay.materialize';
+    threadId: string;
+    overlayPath: string;
+    allowedServers: string[];
+    emittedServers: number;
+    sourceConfigPresent: boolean;
+    authLinked: boolean;
 };
 export interface AuditLog {
     /** Record an event. Should never throw to the caller; log internally on failure. */

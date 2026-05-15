@@ -34,6 +34,7 @@
 import type { Adapter, AdapterInvocation, AdapterResult } from '../../core/adapter.js';
 import type { Executor } from '../../core/executor.js';
 import type { IntelligenceTier } from '../../core/manifests.js';
+import type { AuditLog } from '../../core/auditLog.js';
 export declare class CodexAdapter implements Adapter {
     readonly id: "codex";
     readonly readOnly: true;
@@ -41,10 +42,13 @@ export declare class CodexAdapter implements Adapter {
     private readonly defaultTimeoutMs;
     private readonly tiers;
     private readonly defaultTier;
+    private readonly auditLog?;
     constructor(opts?: {
         defaultTimeoutMs?: number;
         tiers?: Record<IntelligenceTier, string>;
         defaultTier?: IntelligenceTier;
+        /** v2.5.0 — receives `codex.overlay.materialize` audit events. */
+        auditLog?: AuditLog;
     });
     invoke(inv: AdapterInvocation, exec: Executor): Promise<AdapterResult>;
 }
