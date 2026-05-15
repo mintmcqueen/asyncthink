@@ -19,6 +19,7 @@
  */
 import { randomUUID } from 'crypto';
 import { CredentialsNotSupportedError, } from '../core/taskExecutor.js';
+import { resolveModel } from '../adapters/tierResolver.js';
 const REMINDER_OPEN = 'Thread is open. Call delegate_close({threadId}) when this conversation is done. ' +
     'Idle threads are auto-swept after 6 hours.';
 const REMINDER_CLOSED = 'Thread closed.';
@@ -31,12 +32,21 @@ export class Delegate {
     executor;
     auditLog;
     taskExecutor;
-    constructor(adapters, threadStore, executor, auditLog, taskExecutor) {
+    manifests;
+    constructor(adapters, threadStore, executor, auditLog, taskExecutor, 
+    /**
+     * v2.3.1 (H1+H2): optional manifest registry. When provided alongside a
+     * gate-bearing taskExecutor (LocalInProcessTaskExecutor), sync delegate
+     * applies the same rate-limit + auth pre-flight gates that the async path
+     * runs in executor.start().
+     */
+    manifests) {
         this.adapters = adapters;
         this.threadStore = threadStore;
         this.executor = executor;
         this.auditLog = auditLog;
         this.taskExecutor = taskExecutor;
+        this.manifests = manifests;
     }
     /** Synchronous turn — returns the assistant response inline. */
     async run(req) {
@@ -78,6 +88,34 @@ export class Delegate {
             content: req.prompt,
         };
         await this.threadStore.append(threadId, userTurn);
+        // v2.3.1 (H1+H2): apply pre-flight gates on the sync path too. Reuses the
+        // executor's shared state (recentSpawns / authProbeCache) so async and
+        // sync forks share the same window+token budget. Gracefully no-ops when
+        // the manifest registry or task executor isn't wired (e.g. unit tests).
+        let rateLimitSlotPush;
+        const gateBearing = this.taskExecutor;
+        if (gateBearing && typeof gateBearing.applyAuthGate === 'function') {
+            if (req.preflight === 'auth') {
+                gateBearing.applyAuthGate(req.adapter, req.principal ?? null, req.model);
+            }
+            if (this.manifests) {
+                const manifest = await this.manifests.get(req.adapter);
+                if (manifest) {
+                    const resolved = resolveModel({ prompt: req.prompt, intelligence: req.intelligence, model: req.model, files: req.files }, manifest.tiers, manifest.defaultTier, { adapterId: req.adapter, tierLimits: manifest.tierLimits });
+                    if (resolved.limits?.rateLimit) {
+                        rateLimitSlotPush = await gateBearing.applyRateLimitGate({
+                            adapter: req.adapter,
+                            prompt: req.prompt,
+                            files: req.files,
+                            principal: req.principal ?? null,
+                            resolvedModel: resolved.model,
+                            resolvedTier: resolved.tier,
+                            rateLimit: resolved.limits.rateLimit,
+                        });
+                    }
+                }
+            }
+        }
         const result = await adapter.invoke({
             prompt: effectivePrompt,
             files: req.files,
@@ -86,7 +124,14 @@ export class Delegate {
             timeoutMs: req.timeoutMs,
             intelligence: req.intelligence,
             model: req.model,
+            // v2.3.1 (B1) — sync delegate must forward the additive allowlist too;
+            // previously only Council.runFork was wired (sync forks), so async
+            // delegate and sync delegate silently dropped the field.
+            mcpServers: req.mcpServers,
         }, this.executor);
+        // v2.3.1 (B2): consume the rate-limit slot only after invoke succeeds.
+        if (rateLimitSlotPush)
+            rateLimitSlotPush();
         const assistantTurn = {
             ts: new Date().toISOString(),
             role: 'assistant',
@@ -160,8 +205,9 @@ export class Delegate {
             threadId: req.threadId,
             skill: req.skill,
             // v2.3 (F3-D.2, R-DIAG-D.4) — forward additive allowlist + preflight opt-in.
-            ...(req.mcpServers !== undefined && { mcpServers: req.mcpServers }),
-            ...(req.preflight !== undefined && { preflight: req.preflight }),
+            // Fields are now first-class on TaskExecutorRequest (v2.3.1 B1).
+            mcpServers: req.mcpServers,
+            preflight: req.preflight,
         });
         return {
             taskId: state.taskId,

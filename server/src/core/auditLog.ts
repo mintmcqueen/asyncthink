@@ -36,11 +36,28 @@ export type AuditEvent =
       idempotencyKey?: string;
     }
   | {
-      kind: 'task.complete' | 'task.fail';
+      kind: 'task.complete';
       taskId: string;
       adapter: string;
       durationMs: number;
       error?: string;
+    }
+  | {
+      kind: 'task.fail';
+      taskId: string;
+      adapter: string;
+      durationMs: number;
+      error?: string;
+      /**
+       * v2.3.1 (H4): typed kind from AdapterError when the failure was
+       * classified. Lets operators bucket failure shapes from the audit log
+       * without joining back to the task mirror.
+       */
+      errorKind?: string;
+      /** v2.3.1 (H4): one-sentence actionable next step. */
+      errorActionable?: string;
+      /** v2.3.1: structured per-kind details (e.g. capTokens, cap.dim for rate-limit). */
+      errorDetails?: Record<string, unknown>;
     }
   | {
       kind: 'task.cancel' | 'task.expire';

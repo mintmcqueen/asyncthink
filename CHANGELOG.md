@@ -10,6 +10,52 @@ All notable changes to AsyncThink are documented here. The format follows [Keep 
 - Set plugin and marketplace author to `mintmcqueen`.
 - GitHub default branch set to `develop` so plugin installs pull v2 code by default.
 
+## [2.3.1] — 2026-05-15
+
+Review fix-pack from PR #5 (mintmcqueen). Four blockers + four high-impact gaps + several defensive polish items, all surfaced during code review of the v2.3.0 stack before merge.
+
+### Fixed (blockers)
+- **B1** — `mcpServers` is now first-class on `TaskExecutorRequest` and forwarded by ALL four invocation paths: sync delegate (`Delegate.run`), async delegate (`Delegate.runAsync` → executor.start → runTask), sync fork (`Council.runFork` — already wired in v2.3.0), async fork (executor.start → runTask). New integration test `__tests__/integration/mcpServersPropagation.test.ts` asserts the field reaches `adapter.invoke` from every path. Previously: async paths silently dropped the value.
+- **B2** — Rate-limit pre-flight refuse math corrected (R6a-D.5):
+  - Branches on `cap.dim` (`input` divides by estimated tokens; `requests`/`messages` use the cap as item count, NOT tokens; `output` is not gated). Fixes gemini high's `{tokens:250, windowSec:86400, dim:'requests'}` which v2.3.0 wrongly computed as 0 allowance → forced 1 fork/day.
+  - Bucket window aligned with `cap.windowSec` (was named "per-minute" but spanned the full window).
+  - Files included in the token estimate (uses `approxTokensWithFiles`, same byte heuristic as `checkContextLimit`).
+  - Slot push deferred to AFTER the inflight Promise spawns so a failed step doesn't burn a phantom slot.
+  - New unit tests `__tests__/unit/rateLimitRefuse.test.ts` (6 cases) cover all four dims and two window sizes.
+- **B3** — The runtime sweeper (`delegate/sweeper.ts`) now delegates to `taskExecutor.sweepIdle()` so the in-memory `cancelling` set actually protects in-flight cancellations (R5-D.3) and the 30-minute hard ceiling (R5-D.4) fires `task.terminated{signal:'orphaned'}` (R5-D.5). v2.3.0 called `taskStore.cleanupStale()` directly with no skip set, making R5-D.3/D.4/D.5 dead on the sweep path. New integration test asserts both branches.
+- **B4** — `detectAuthPath` is now an exhaustive `switch` over `AdapterId` with a `never`-typed default that throws on unknown ids. v2.3.0 had non-`else` if-chains that silently ran the codex branch for any non-claude/non-gemini adapter — the manifest validator accepts arbitrary ids, so this was a real footgun. Test covers the throw.
+
+### Fixed (high-impact gaps)
+- **H1 + H2** — Pre-flight gates now run on SYNC paths too:
+  - `Delegate.run` (sync delegate) honors `preflight: 'auth'` and applies the R6a-D.5 rate-limit refuse, sharing the executor's `recentSpawns` and `authProbeCache` for state consistency.
+  - `Council.runFork` (sync forks) does the same.
+  - Both paths gain optional dependencies (`taskExecutor` for Delegate, `taskExecutor` + `manifests` for Council) so the gates run when wired via `app.ts` and remain inert in unit tests that build them directly.
+  - The shared logic lives on two new public methods on `LocalInProcessTaskExecutor`: `applyAuthGate(adapter, principal, model)` and `applyRateLimitGate(req)` (returns a deferred-push closure).
+  - Net effect: the v2.2 playtest 429 path (sync council forks at claude-haiku rate-limited tier) is now gated.
+- **H3** — `detectClaudeError` no longer runs on `exitCode === 0` (or non-timeout success-shaped output). v2.3.0 ran the permissive substring detector unconditionally; a legitimate response mentioning "Rate limit reached" in prose would throw away as a fake rate-limit AdapterError. Gate semantics match gemini and codex now. New regression test asserts the success path.
+- **H4** — `task.fail` audit event variant now carries `errorKind`, `errorActionable`, `errorDetails`. TaskState also persists `errorDetails`. Operators can bucket failure-shape distributions from the audit log without joining back to the task mirror.
+
+### Fixed (defensive / fidelity)
+- `LocalSubprocessExecutor.cancel(onExit)` now QUEUES the `onExit` callback when cancel arrives before spawn, then arms it on the real subprocess `close` event so `task.terminated` records actual `signal`/`exitCode` (instead of `null,null`). Includes a 5-second fallback timer for the rare case where the spawn never arrives (runTask aborts early).
+- Gemini noise signature is now a prefix-match regex (`isNoiseOnlyResponse`) tolerant of trim, wording variants (`MCP issues found` / `MCP issues detected`), and case. v2.3.0's strict exact-match would regress to silent-failure on a trivial wording change in gemini-cli.
+- Codex `preflightAuthProbe` now checks `~/.codex/auth.json` (subscription auth) in addition to `OPENAI_API_KEY`. v2.3.0 always returned `ok:true` for codex even when neither was present, breaking the "fails fast on missing auth" contract.
+
+### Schema additions
+- `TaskExecutorRequest.mcpServers?: string[]` and `TaskExecutorRequest.preflight?: 'auth' | 'none'` are now first-class.
+- `TaskState.errorDetails?: Record<string, unknown>` (additive).
+- `AuditEvent` `task.fail` variant gains `errorKind?`, `errorActionable?`, `errorDetails?` (additive).
+- `LocalInProcessTaskExecutor.applyAuthGate(...)` and `.applyRateLimitGate(...)` are now public methods.
+- `Council` constructor gains optional `gates?: CouncilGates` and `manifests?: ManifestRegistry` parameters.
+- `Delegate` constructor gains an optional `manifests?: ManifestRegistry` parameter.
+
+### Tests
+- 250 unit + integration tests passing (was 234 in v2.3.0). New files: `rateLimitRefuse.test.ts` (6), `mcpServersPropagation.test.ts` (5), `sweeperCancellingSkip.test.ts` (2). Extensions to `authPath.test.ts` (B4), `adapters.test.ts` (H3), `jsonlAuditLog.test.ts` (H4).
+- v2.3 acceptance: 24 offline + 26 live (regression check including real claude PONG).
+- v2.2 acceptance: 23/23 (version-tolerant, regression check).
+
+### Migration
+- Additive at wire format. v2.3.0 → v2.3.1 callers see no breaking changes. `TaskState`/`AuditEvent` additions are optional fields; old readers ignore. The `Delegate` and `Council` constructor extensions are optional — existing tests that build them with the v2.3.0 signature still work.
+
 ## [2.3.0] — 2026-05-10
 
 Fix-pack release from real-use playtest of v2.2 (2026-04-28). Five issue clusters addressed across 21 locked rulings; all amendments to v2.2 carry deprecation windows so wire-format stays backward-compatible. The framework doc with full rulings lives at `dev/research/v2-3-R7-framework.md` (gitignored per R2-D.4).

@@ -24,7 +24,7 @@
  * dispatching via OAuth-authenticated companion daemon.
  */
 import type { Executor } from '../core/executor.js';
-import type { ManifestRegistry } from '../core/manifests.js';
+import type { ManifestRegistry, TierLimits } from '../core/manifests.js';
 import type { ThreadStore } from '../core/threadStore.js';
 import { type AdapterLookup, type ExecTaskStatus, type ProgressListener, type TaskExecutor, type TaskExecutorRequest, type TaskExecutorState } from '../core/taskExecutor.js';
 import type { AuditLog } from '../core/auditLog.js';
@@ -86,6 +86,36 @@ export declare class LocalInProcessTaskExecutor implements TaskExecutor {
     onProgress(taskId: string, cb: ProgressListener): () => void;
     emitProgress(taskId: string, message: string): void;
     sweepIdle(): Promise<string[]>;
+    /**
+     * v2.3.1 (H2): Public auth gate. Throws AdapterError(kind:'auth') if the
+     * adapter's local auth probe fails. Used by:
+     *   - executor.start() when req.preflight==='auth' (async paths)
+     *   - Delegate.run() when req.preflight==='auth' (sync delegate)
+     *   - Council.runFork() when req.preflight==='auth' (sync forks)
+     */
+    applyAuthGate(adapterId: string, principal: string | null, resolvedModel?: string): void;
+    /**
+     * v2.3.1 (H1): Public rate-limit gate. Inspects the cap advisory and either
+     * throws AdapterError(kind:'rate-limit') or returns a deferred-push closure
+     * that the caller invokes after their downstream spawn succeeds.
+     *
+     * Used by:
+     *   - executor.start() (async paths) — invokes push after step 5/6 succeeds
+     *   - Council.runFork() (sync forks) — invokes push after adapter.invoke succeeds
+     *   - Delegate.run() (sync delegate) — invokes push after adapter.invoke succeeds
+     *
+     * The deferred-push prevents a phantom slot from burning when a downstream
+     * step throws (B2 fix).
+     */
+    applyRateLimitGate(args: {
+        adapter: string;
+        prompt: string;
+        files?: string[];
+        principal: string | null;
+        resolvedModel?: string;
+        resolvedTier: string;
+        rateLimit: NonNullable<TierLimits['rateLimit']>;
+    }): Promise<(() => void) | undefined>;
     /**
      * v2.3 (R-DIAG-D.4): cached local auth probe. Returns `{ok}` based on cheap
      * LOCAL checks only — never paid API calls. 60s TTL keyed by adapter+principal.

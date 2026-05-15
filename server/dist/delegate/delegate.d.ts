@@ -20,7 +20,7 @@
 import type { Adapter } from '../core/adapter.js';
 import type { AuditLog } from '../core/auditLog.js';
 import type { Executor } from '../core/executor.js';
-import type { IntelligenceTier } from '../core/manifests.js';
+import type { IntelligenceTier, ManifestRegistry } from '../core/manifests.js';
 import type { TaskExecutor, TaskExecutorState } from '../core/taskExecutor.js';
 import type { ThreadStore } from '../core/threadStore.js';
 export interface DelegateRequest {
@@ -105,7 +105,21 @@ export declare class Delegate {
     private readonly executor;
     private readonly auditLog?;
     private readonly taskExecutor?;
-    constructor(adapters: AdapterLookup, threadStore: ThreadStore, executor: Executor, auditLog?: AuditLog | undefined, taskExecutor?: TaskExecutor | undefined);
+    /**
+     * v2.3.1 (H1+H2): optional manifest registry. When provided alongside a
+     * gate-bearing taskExecutor (LocalInProcessTaskExecutor), sync delegate
+     * applies the same rate-limit + auth pre-flight gates that the async path
+     * runs in executor.start().
+     */
+    private readonly manifests?;
+    constructor(adapters: AdapterLookup, threadStore: ThreadStore, executor: Executor, auditLog?: AuditLog | undefined, taskExecutor?: TaskExecutor | undefined, 
+    /**
+     * v2.3.1 (H1+H2): optional manifest registry. When provided alongside a
+     * gate-bearing taskExecutor (LocalInProcessTaskExecutor), sync delegate
+     * applies the same rate-limit + auth pre-flight gates that the async path
+     * runs in executor.start().
+     */
+    manifests?: ManifestRegistry | undefined);
     /** Synchronous turn — returns the assistant response inline. */
     run(req: DelegateRequest): Promise<DelegateResponse>;
     /**

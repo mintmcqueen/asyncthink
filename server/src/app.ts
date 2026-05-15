@@ -41,8 +41,18 @@ const taskExecutor = new LocalInProcessTaskExecutor({
   auditLog,
   manifests: manifestRegistry,
 });
-const delegate = new Delegate(adapters, threadStore, executor, auditLog, taskExecutor);
-const council = new Council(adapters, threadStore, taskStore, executor, auditLog);
+const delegate = new Delegate(adapters, threadStore, executor, auditLog, taskExecutor, manifestRegistry);
+// v2.3.1 (H1+H2): wire pre-flight gates into Council so sync forks honor the
+// same rate-limit + auth-preflight contract as async forks.
+const council = new Council(
+  adapters,
+  threadStore,
+  taskStore,
+  executor,
+  auditLog,
+  taskExecutor,
+  manifestRegistry
+);
 const thinking = new AsyncThinkingServer();
 
 export function getAdapters(): AdapterRegistry {

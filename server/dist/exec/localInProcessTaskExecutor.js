@@ -119,51 +119,26 @@ export class LocalInProcessTaskExecutor {
         // 4.5. v2.3 (R-DIAG-D.4): optional auth pre-flight. Throws AdapterError on
         // failure BEFORE any task row is created.
         if (req.preflight === 'auth') {
-            const probe = this.preflightAuthProbe(req.adapter, principal);
-            if (!probe.ok) {
-                throw new AdapterError({
-                    kind: 'auth',
-                    adapter: req.adapter,
-                    model: resolvedModel,
-                    summary: `${req.adapter} pre-flight auth probe failed${probe.detail ? `: ${probe.detail}` : ''}`,
-                    actionable: probeActionable(req.adapter),
-                });
-            }
+            this.applyAuthGate(req.adapter, principal, resolvedModel);
         }
         // 4.6. v2.3 (R6a-D.5): pre-flight rate-limit refuse. Look up the
         // auth-path-aware advisory; if rate-limited and we've already burned the
-        // budget for this minute, throw AdapterError with kind:'rate-limit'.
+        // budget for this window, throw AdapterError with kind:'rate-limit'.
+        //
+        // v2.3.1 (B2) fixes: branch on cap.dim, align bucket window, include
+        // files, defer slot push. The shared logic lives on `applyRateLimitGate`
+        // so Council (sync forks, H1) and Delegate.run (sync, H2) can reuse it.
+        let rateLimitSlotPush;
         if (manifest && resolvedLimits?.rateLimit && resolvedTier) {
-            const authPath = detectAuthPath(req.adapter);
-            const advisory = resolvedLimits.rateLimit.byAuthPath[authPath] ??
-                resolvedLimits.rateLimit.byAuthPath[resolvedLimits.rateLimit.default];
-            if (advisory?.class === 'rate-limited' && advisory.cap) {
-                const estTokens = Math.max(1, Math.ceil(req.prompt.length / 4));
-                const allowedPerMin = Math.max(1, Math.floor(advisory.cap.tokens / estTokens / (advisory.cap.windowSec / 60)));
-                const key = `${req.adapter}::${resolvedModel ?? '?'}::${authPath}::${principal ?? '<null>'}`;
-                const now = this.now().getTime();
-                const window = (advisory.cap.windowSec * 1000);
-                const bucket = (this.recentSpawns.get(key) ?? []).filter((t) => now - t < window);
-                if (bucket.length >= allowedPerMin) {
-                    throw new AdapterError({
-                        kind: 'rate-limit',
-                        adapter: req.adapter,
-                        model: resolvedModel,
-                        summary: `Skipping fork: tier "${resolvedTier}" via auth-path "${authPath}" ` +
-                            `supports ~${allowedPerMin} forks per ${Math.round(advisory.cap.windowSec / 60)}min ` +
-                            `at ~${estTokens} tokens; ${bucket.length} already in flight this window.`,
-                        actionable: `Reduce parallel forks, pin a different intelligence tier, or upgrade your ${authPath} quota.`,
-                        details: {
-                            allowedPerMin,
-                            observed: bucket.length,
-                            cap: advisory.cap,
-                            authPath,
-                        },
-                    });
-                }
-                bucket.push(now);
-                this.recentSpawns.set(key, bucket);
-            }
+            rateLimitSlotPush = await this.applyRateLimitGate({
+                adapter: req.adapter,
+                prompt: req.prompt,
+                files: req.files,
+                principal,
+                resolvedModel,
+                resolvedTier,
+                rateLimit: resolvedLimits.rateLimit,
+            });
         }
         // 5. Allocate task id and TaskState row.
         const taskId = newTaskId();
@@ -202,6 +177,11 @@ export class LocalInProcessTaskExecutor {
         handle.promise.finally(() => {
             this.inflight.delete(taskId);
         });
+        // v2.3.1 (B2): record the rate-limit slot only AFTER all prior steps
+        // succeed. A failed step 5 (taskStore.create) or earlier-thrown step would
+        // otherwise burn a phantom slot.
+        if (rateLimitSlotPush)
+            rateLimitSlotPush();
         const state = await this.taskStore.get(taskId);
         return projectState(state);
     }
@@ -357,6 +337,98 @@ export class LocalInProcessTaskExecutor {
         return reaped;
     }
     /**
+     * v2.3.1 (H2): Public auth gate. Throws AdapterError(kind:'auth') if the
+     * adapter's local auth probe fails. Used by:
+     *   - executor.start() when req.preflight==='auth' (async paths)
+     *   - Delegate.run() when req.preflight==='auth' (sync delegate)
+     *   - Council.runFork() when req.preflight==='auth' (sync forks)
+     */
+    applyAuthGate(adapterId, principal, resolvedModel) {
+        const probe = this.preflightAuthProbe(adapterId, principal);
+        if (!probe.ok) {
+            throw new AdapterError({
+                kind: 'auth',
+                adapter: adapterId,
+                model: resolvedModel,
+                summary: `${adapterId} pre-flight auth probe failed${probe.detail ? `: ${probe.detail}` : ''}`,
+                actionable: probeActionable(adapterId),
+            });
+        }
+    }
+    /**
+     * v2.3.1 (H1): Public rate-limit gate. Inspects the cap advisory and either
+     * throws AdapterError(kind:'rate-limit') or returns a deferred-push closure
+     * that the caller invokes after their downstream spawn succeeds.
+     *
+     * Used by:
+     *   - executor.start() (async paths) — invokes push after step 5/6 succeeds
+     *   - Council.runFork() (sync forks) — invokes push after adapter.invoke succeeds
+     *   - Delegate.run() (sync delegate) — invokes push after adapter.invoke succeeds
+     *
+     * The deferred-push prevents a phantom slot from burning when a downstream
+     * step throws (B2 fix).
+     */
+    async applyRateLimitGate(args) {
+        const authPath = detectAuthPath(args.adapter);
+        const advisory = args.rateLimit.byAuthPath[authPath] ??
+            args.rateLimit.byAuthPath[args.rateLimit.default];
+        if (advisory?.class !== 'rate-limited' || !advisory.cap)
+            return undefined;
+        const estTokens = await approxTokensWithFiles(args.prompt, args.files);
+        const cap = advisory.cap;
+        let allowedPerWindow;
+        let gated = true;
+        switch (cap.dim) {
+            case 'input':
+                allowedPerWindow = Math.max(1, Math.floor(cap.tokens / estTokens));
+                break;
+            case 'output':
+                // Can't predict assistant-side tokens; do not gate.
+                gated = false;
+                allowedPerWindow = Number.POSITIVE_INFINITY;
+                break;
+            case 'requests':
+            case 'messages':
+                allowedPerWindow = Math.max(1, cap.tokens);
+                break;
+            default: {
+                const _x = cap.dim;
+                void _x;
+                gated = false;
+                allowedPerWindow = Number.POSITIVE_INFINITY;
+            }
+        }
+        if (!gated)
+            return undefined;
+        const key = `${args.adapter}::${args.resolvedModel ?? '?'}::${authPath}::${args.principal ?? '<null>'}`;
+        const nowMs = this.now().getTime();
+        const windowMs = cap.windowSec * 1000;
+        const bucket = (this.recentSpawns.get(key) ?? []).filter((t) => nowMs - t < windowMs);
+        if (bucket.length >= allowedPerWindow) {
+            throw new AdapterError({
+                kind: 'rate-limit',
+                adapter: args.adapter,
+                model: args.resolvedModel,
+                summary: `Skipping fork: tier "${args.resolvedTier}" via auth-path "${authPath}" ` +
+                    `supports ~${allowedPerWindow} ${cap.dim === 'requests' ? 'requests' : cap.dim === 'messages' ? 'messages' : 'forks'} ` +
+                    `per ${humanWindow(cap.windowSec)} (est ${estTokens} tokens/fork); ` +
+                    `${bucket.length} already in flight this window.`,
+                actionable: `Reduce parallel forks, pin a different intelligence tier, or upgrade your ${authPath} quota.`,
+                details: {
+                    allowedPerWindow,
+                    observed: bucket.length,
+                    cap,
+                    authPath,
+                    estTokens,
+                },
+            });
+        }
+        return () => {
+            bucket.push(nowMs);
+            this.recentSpawns.set(key, bucket);
+        };
+    }
+    /**
      * v2.3 (R-DIAG-D.4): cached local auth probe. Returns `{ok}` based on cheap
      * LOCAL checks only — never paid API calls. 60s TTL keyed by adapter+principal.
      *
@@ -391,13 +463,34 @@ export class LocalInProcessTaskExecutor {
                 };
         }
         else {
-            // codex: subscription (codex login) or OPENAI_API_KEY. Subscription is
-            // checked via `~/.codex/auth.json` existence in v3; for v2.3 we trust
-            // the user's setup and only fail-fast when env is empty.
+            // codex: subscription (`codex login`) writes `~/.codex/auth.json`. API
+            // path uses OPENAI_API_KEY. v2.3.1: honor the "fails fast on missing
+            // auth" contract by checking BOTH — if neither the env nor the auth
+            // file is present, the probe fails.
             const hasKey = !!env.OPENAI_API_KEY && env.OPENAI_API_KEY.length > 0;
-            result = hasKey
-                ? { ok: true, detail: 'api-key-present' }
-                : { ok: true, detail: 'subscription-assumed' };
+            let hasLoginFile = false;
+            try {
+                // eslint-disable-next-line @typescript-eslint/no-var-requires
+                const { existsSync } = require('fs');
+                const codexHome = env.CODEX_HOME ?? (env.HOME ? `${env.HOME}/.codex` : undefined);
+                if (codexHome)
+                    hasLoginFile = existsSync(`${codexHome}/auth.json`);
+            }
+            catch {
+                /* fs check failed; fall through to env-only check */
+            }
+            if (hasKey) {
+                result = { ok: true, detail: 'OPENAI_API_KEY present' };
+            }
+            else if (hasLoginFile) {
+                result = { ok: true, detail: '~/.codex/auth.json present (subscription)' };
+            }
+            else {
+                result = {
+                    ok: false,
+                    detail: 'neither OPENAI_API_KEY nor ~/.codex/auth.json detected; run `codex login` or set OPENAI_API_KEY',
+                };
+            }
         }
         this.authProbeCache.set(key, { ok: result.ok, detail: result.detail, at: now });
         return result;
@@ -430,6 +523,9 @@ export class LocalInProcessTaskExecutor {
                 model: req.model,
                 timeoutMs: req.timeoutMs,
                 cwd: req.cwd,
+                // v2.3.1 (B1) — async path must forward the additive allowlist too.
+                // Previously only the sync council path forwarded mcpServers.
+                mcpServers: req.mcpServers,
             }, exec);
             envelope = {
                 text: result.text,
@@ -511,6 +607,7 @@ export class LocalInProcessTaskExecutor {
                 exitCode: envelope?.exitCode,
                 errorKind: adapterError?.kind,
                 errorActionable: adapterError?.actionable,
+                errorDetails: adapterError?.details,
                 completeTime,
                 lastUpdatedAt: completeTime,
             });
@@ -520,6 +617,12 @@ export class LocalInProcessTaskExecutor {
                 adapter: adapter.id,
                 durationMs: envelope?.durationMs ?? 0,
                 error: errMsg,
+                // v2.3.1 (H4): carry typed envelope fields on the audit event so
+                // operators can bucket failure shapes from JSONL without joining back
+                // to the task mirror.
+                ...(adapterError?.kind && { errorKind: adapterError.kind }),
+                ...(adapterError?.actionable && { errorActionable: adapterError.actionable }),
+                ...(adapterError?.details && { errorDetails: adapterError.details }),
             });
             await this.recordAudit({
                 kind: 'invoke',
@@ -559,6 +662,39 @@ export class LocalInProcessTaskExecutor {
 }
 function newTaskId() {
     return `tsk-${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`;
+}
+/**
+ * v2.3.1 (B2): estimate tokens for prompt + file bytes (4 chars/token heuristic).
+ * Used by the rate-limit gate so multi-file forks don't slip past with a
+ * prompt-only estimate. Mirrors checkContextLimit's byte accounting but
+ * doesn't throw on oversize — the gate's job is allowance, not rejection.
+ */
+async function approxTokensWithFiles(prompt, files) {
+    let totalChars = prompt.length;
+    if (files?.length) {
+        const { promises: fsp } = await import('fs');
+        for (const f of files) {
+            try {
+                const stat = await fsp.stat(f);
+                if (stat.isFile())
+                    totalChars += stat.size;
+            }
+            catch {
+                /* ignore unreadable files; adapter surfaces the error itself */
+            }
+        }
+    }
+    return Math.max(1, Math.ceil(totalChars / 4));
+}
+/** Human-readable rendering of a windowSec value, for error envelopes. */
+function humanWindow(windowSec) {
+    if (windowSec >= 86400 && windowSec % 86400 === 0)
+        return `${windowSec / 86400}d`;
+    if (windowSec >= 3600 && windowSec % 3600 === 0)
+        return `${windowSec / 3600}h`;
+    if (windowSec >= 60 && windowSec % 60 === 0)
+        return `${windowSec / 60}min`;
+    return `${windowSec}s`;
 }
 function probeActionable(adapter) {
     switch (adapter) {

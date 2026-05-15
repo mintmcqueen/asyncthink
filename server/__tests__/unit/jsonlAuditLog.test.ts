@@ -100,6 +100,27 @@ describe('JsonlAuditLog', () => {
     ]);
   });
 
+  // v2.3.1 (H4) — task.fail variant carries errorKind/errorActionable/errorDetails
+  it('records task.fail with errorKind, errorActionable, errorDetails (H4)', async () => {
+    const log = new JsonlAuditLog({ path });
+    await log.record({
+      kind: 'task.fail',
+      taskId: 'tsk-h4',
+      adapter: 'claude',
+      durationMs: 3000,
+      error: 'rate-limited',
+      errorKind: 'rate-limit',
+      errorActionable: 'wait then retry',
+      errorDetails: { capTokens: 50000, windowSec: 60, dim: 'input' },
+    });
+    const lines = readFileSync(path, 'utf8').trim().split('\n');
+    const event = JSON.parse(lines[0]).event;
+    expect(event.kind).toBe('task.fail');
+    expect(event.errorKind).toBe('rate-limit');
+    expect(event.errorActionable).toBe('wait then retry');
+    expect(event.errorDetails).toEqual({ capTokens: 50000, windowSec: 60, dim: 'input' });
+  });
+
   // v2.3 (R5-D.5)
   it('records task.terminated with terminatedAt, signal, exitCode', async () => {
     const log = new JsonlAuditLog({ path });

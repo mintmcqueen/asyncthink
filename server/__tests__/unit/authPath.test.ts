@@ -78,6 +78,13 @@ describe('detectAuthPath — codex', () => {
   });
 });
 
+describe('detectAuthPath — unknown adapter (B4)', () => {
+  it('throws on an unknown adapter id', () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect(() => detectAuthPath('mystery' as any, { env: {} })).toThrow(/unknown adapter/i);
+  });
+});
+
 describe('authPathsFor', () => {
   it('lists all paths an adapter may use', () => {
     expect(authPathsFor('claude')).toEqual(['subscription', 'api', 'vertex', 'bedrock']);

@@ -15,7 +15,7 @@
  * applies category-wise TTLs (working 60m, completed 60m, failed 10m,
  * cancelled 5m). Same 30s rate-limit on combined sweeps.
  */
-import { getTaskStore, getThreadStore } from '../app.js';
+import { getTaskExecutor, getThreadStore } from '../app.js';
 const DEFAULT_IDLE_MS = 6 * 60 * 60 * 1000;
 let lastSweepAt = 0;
 const MIN_SWEEP_INTERVAL_MS = 30_000;
@@ -51,7 +51,12 @@ async function sweepBoth(idleMs, force) {
         // Sweeper failures must never break a tool call.
     }
     try {
-        reapedTasks = await getTaskStore().cleanupStale();
+        // v2.3.1 (B3): route through the executor's sweepIdle() so the in-memory
+        // `cancelling` set actually protects in-flight cancellations from premature
+        // deletion (R5-D.3) and the 30m hard ceiling (R5-D.4) fires `task.terminated`
+        // with signal:'orphaned' (R5-D.5) instead of a generic `task.expire`.
+        // Direct `taskStore.cleanupStale()` was bypassing all three of those.
+        reapedTasks = await getTaskExecutor().sweepIdle();
     }
     catch {
         // ditto

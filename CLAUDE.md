@@ -1,6 +1,6 @@
 # AsyncThink MCP Server — Developer Documentation
 
-> **Status:** v2.3.0 released. Fix-pack: gemini parser hardening (F3), typed AdapterError envelope + auth pre-flight (R-DIAG), auth-path-aware rate-limit advisories (R6a amendments), curated MCP-server allowlist (F3-D.2), cancellation post-exit confirmation (R5). Builds on v2.2 (background jobs, tier-model rework, skill pinning, credentials wire-stub). v2.0.0 onwards is the modular refactor; v1.1.9 git tag remains the historical pin for v1 behavior.
+> **Status:** v2.3.1 released. Review fix-pack from PR #5: blockers B1-B4 (mcpServers propagation, rate-limit math by dim/window, sweeper integration with cancelling Set, exhaustive authPath switch) + high-impact gaps H1-H4 (sync paths now run pre-flight gates, claude detector gated on non-zero exit, audit task.fail carries typed error envelope) + cancel(onExit) ordering + gemini noise regex robustness + codex auth probe checks ~/.codex/auth.json. **The pre-flight rate-limit refuse now applies to sync council forks too** (was async-only in v2.3.0). v2.3.0 fix-pack: gemini parser hardening (F3), typed AdapterError envelope + auth pre-flight (R-DIAG), auth-path-aware rate-limit advisories (R6a amendments), curated MCP-server allowlist (F3-D.2), cancellation post-exit confirmation (R5). v2.0.0 onwards is the modular refactor; v1.1.9 git tag remains the historical pin for v1 behavior.
 
 ## Quick install / update
 

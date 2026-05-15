@@ -29,8 +29,19 @@ const GEMINI_TIERS = {
 };
 /** v2.3 (F3-D.2): default MCP-server allowlist when manifest doesn't specify. */
 const DEFAULT_MCP_ALLOWLIST = ['sequentialthinking', 'context7'];
-/** v2.3 (F3-D.1): exact-match regex for the gemini-cli operational-noise prefix. */
-const NOISE_RESPONSE_RE = /^\s*MCP issues detected\.\s*Run \/mcp list for status\.\s*$/i;
+/**
+ * v2.3 (F3-D.1) / v2.3.1: signature for the gemini-cli operational-noise prefix.
+ * Prefix-match so trivial wording changes ("MCP issues found" / extra trailing
+ * text) still trip the guard. The trim-then-startsWith check on the parsed
+ * `response` field below means a legitimate response that BEGINS with the
+ * noise but contains real content still leaks through — that's intentional;
+ * what we're filtering out is responses where the noise is THE response.
+ */
+const NOISE_RESPONSE_PREFIX_RE = /^\s*MCP\s+issues\b[^\n]*?\/mcp\s+list[^\n]*$/i;
+/** Strict check: response IS just the noise (whitespace-tolerant). */
+function isNoiseOnlyResponse(text) {
+    return NOISE_RESPONSE_PREFIX_RE.test(text.trim());
+}
 export class GeminiAdapter {
     id = 'gemini';
     readOnly = true;
@@ -90,7 +101,7 @@ export class GeminiAdapter {
         // model response.
         if (text === '' &&
             result.exitCode === 0 &&
-            NOISE_RESPONSE_RE.test(result.stdout.trim())) {
+            isNoiseOnlyResponse(result.stdout)) {
             throw new AdapterError({
                 kind: 'silent-failure',
                 adapter: this.id,
@@ -172,7 +183,7 @@ function parseGeminiJson(stdout) {
             // v2.3 (F3-D.1): if the response literally equals the known operational-noise
             // prefix, drop it. This guards against the v2.2 playtest's silent-failure mode
             // where gemini-cli's UserFeedback subscriber polluted the response stream.
-            if (NOISE_RESPONSE_RE.test(obj.response.trim())) {
+            if (isNoiseOnlyResponse(obj.response)) {
                 console.error('[Adapter:gemini] Discarding response that matched the known operational-noise signature; ' +
                     'gemini-cli likely emitted UserFeedback into the response stream. Returning empty.');
                 return '';

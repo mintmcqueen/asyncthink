@@ -306,7 +306,7 @@ async function main() {
       const sp = syncCall.result?.structuredContent;
       const isAsyncShape = typeof sp?.taskId === 'string' && !sp?.threadId;
       expect('sync delegate did not return async {taskId} shape', !isAsyncShape,
-        `got: ${JSON.stringify(sp).slice(0, 150)}`);
+        `got: ${JSON.stringify(sp ?? syncCall.result).slice(0, 150)}`);
     }
 
     header('Phase 12 — Audit log carries task.terminated for cancelled task (R5-D.5)');

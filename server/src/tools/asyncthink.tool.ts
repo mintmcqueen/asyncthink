@@ -200,9 +200,10 @@ export function registerAsyncThinkTool(server: McpServer): void {
                 parentChainId: chainId,
                 skill: f.skill,
                 // v2.3 — additive allowlist + opt-in preflight (F3-D.2, R-DIAG-D.4).
-                ...(mcpServers !== undefined && { mcpServers }),
-                ...(preflight !== undefined && { preflight }),
-              } as Parameters<typeof getTaskExecutor>[never]);
+                // First-class on TaskExecutorRequest as of v2.3.1 B1.
+                mcpServers,
+                preflight,
+              });
               detachedTaskIds.push({ forkId: f.id, taskId: state.taskId });
               continue;
             }

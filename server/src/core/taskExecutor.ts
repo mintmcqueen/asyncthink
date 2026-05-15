@@ -55,6 +55,17 @@ export interface TaskExecutorRequest {
   parentChainId?: string;
   /** Optional skill id used to compose the prompt (audit only). */
   skill?: string;
+  /**
+   * v2.3.1 (B1) — additive MCP-server allowlist for adapter spawn (F3-D.2).
+   * Merged with manifest defaults inside the adapter; missing means "manifest
+   * default only".
+   */
+  mcpServers?: string[];
+  /**
+   * v2.3 (R-DIAG-D.4) — opt-in auth pre-flight gate. When 'auth', the
+   * executor runs a local probe BEFORE allocating a task row.
+   */
+  preflight?: 'auth' | 'none';
 }
 
 export interface TaskExecutorResultEnvelope {

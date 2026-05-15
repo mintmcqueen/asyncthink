@@ -26,34 +26,50 @@
  * Pure function — no side effects, no shell execution. Caller must NOT
  * cache results across env-mutation boundaries (use 60s LRU at the call
  * site if caching is desired).
+ *
+ * v2.3.1 (B4): exhaustive switch over `AdapterId`. An unknown adapter id
+ * throws rather than silently falling through to the codex branch — the
+ * manifest registry allows arbitrary adapter ids, so this safety net catches
+ * misconfigured manifests instead of producing wrong advisories.
  */
 export function detectAuthPath(adapter, opts = {}) {
     const env = opts.env ?? process.env;
     const has = (k) => !!env[k] && env[k].length > 0;
     const eq = (k, v) => env[k] === v;
-    if (adapter === 'claude') {
-        if (eq('CLAUDE_CODE_USE_VERTEX', '1') || eq('CLAUDE_CODE_USE_VERTEX', 'true'))
-            return 'vertex';
-        if (eq('CLAUDE_CODE_USE_BEDROCK', '1') || eq('CLAUDE_CODE_USE_BEDROCK', 'true'))
-            return 'bedrock';
-        if (has('ANTHROPIC_API_KEY'))
-            return 'api';
-        return 'subscription';
-    }
-    if (adapter === 'gemini') {
-        if ((eq('GOOGLE_GENAI_USE_VERTEXAI', 'true') || eq('GOOGLE_GENAI_USE_VERTEXAI', '1')) &&
-            has('GOOGLE_CLOUD_PROJECT')) {
-            return 'vertex';
+    switch (adapter) {
+        case 'claude': {
+            if (eq('CLAUDE_CODE_USE_VERTEX', '1') || eq('CLAUDE_CODE_USE_VERTEX', 'true')) {
+                return 'vertex';
+            }
+            if (eq('CLAUDE_CODE_USE_BEDROCK', '1') || eq('CLAUDE_CODE_USE_BEDROCK', 'true')) {
+                return 'bedrock';
+            }
+            if (has('ANTHROPIC_API_KEY'))
+                return 'api';
+            return 'subscription';
         }
-        return 'ai-studio';
+        case 'gemini': {
+            if ((eq('GOOGLE_GENAI_USE_VERTEXAI', 'true') || eq('GOOGLE_GENAI_USE_VERTEXAI', '1')) &&
+                has('GOOGLE_CLOUD_PROJECT')) {
+                return 'vertex';
+            }
+            return 'ai-studio';
+        }
+        case 'codex': {
+            const hasAzure = has('AZURE_OPENAI_API_KEY') || has('AZURE_OPENAI_ENDPOINT') || has('AZURE_OPENAI_BASE_URL');
+            if (hasAzure && has('OPENAI_API_KEY'))
+                return 'azure';
+            if (has('OPENAI_API_KEY'))
+                return 'api';
+            return 'subscription';
+        }
+        default: {
+            // Compile-time exhaustiveness check; runtime guard for misconfigured manifests
+            // that declare a non-built-in adapter id.
+            const exhaustive = adapter;
+            throw new Error(`detectAuthPath: unknown adapter id "${String(exhaustive)}". Supported: claude, gemini, codex.`);
+        }
     }
-    // codex
-    const hasAzure = has('AZURE_OPENAI_API_KEY') || has('AZURE_OPENAI_ENDPOINT') || has('AZURE_OPENAI_BASE_URL');
-    if (hasAzure && has('OPENAI_API_KEY'))
-        return 'azure';
-    if (has('OPENAI_API_KEY'))
-        return 'api';
-    return 'subscription';
 }
 /** All auth paths an adapter MAY use; used by manifest validation. */
 export function authPathsFor(adapter) {

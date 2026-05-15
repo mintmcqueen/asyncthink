@@ -66,6 +66,8 @@ export interface TaskState {
     errorKind?: string;
     /** v2.3 — one-sentence actionable next step from AdapterError (R-DIAG-D.1). */
     errorActionable?: string;
+    /** v2.3.1 — structured per-kind details (e.g. capTokens, cap.dim for rate-limit). */
+    errorDetails?: Record<string, unknown>;
 }
 export interface TaskStore {
     /** Allocate a task and return its working directory. */

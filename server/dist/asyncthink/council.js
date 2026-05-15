@@ -14,19 +14,30 @@
  */
 import { randomUUID } from 'crypto';
 import { AdapterError } from '../core/adapterError.js';
+import { resolveModel } from '../adapters/tierResolver.js';
 export class Council {
     adapters;
     threadStore;
     taskStore;
     executor;
     auditLog;
+    gates;
+    manifests;
     inflight = new Map();
-    constructor(adapters, threadStore, taskStore, executor, auditLog) {
+    constructor(adapters, threadStore, taskStore, executor, auditLog, 
+    /**
+     * v2.3.1 (H1+H2): optional pre-flight gates. When wired (via app.ts),
+     * sync forks honor `preflight: 'auth'` and the R6a-D.5 rate-limit refuse.
+     * Tests that build Council directly without gates keep working.
+     */
+    gates, manifests) {
         this.adapters = adapters;
         this.threadStore = threadStore;
         this.taskStore = taskStore;
         this.executor = executor;
         this.auditLog = auditLog;
+        this.gates = gates;
+        this.manifests = manifests;
     }
     newChain() {
         return `chain-${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`;
@@ -56,6 +67,31 @@ export class Council {
     }
     async runFork(adapter, childThreadId, taskId, req) {
         try {
+            // v2.3.1 (H1+H2): apply the pre-flight gates if the executor was wired
+            // through. Auth gate runs when req.preflight==='auth'. Rate-limit gate
+            // runs unconditionally for rate-limited tier cells; throws AdapterError
+            // when over budget so the catch below classifies it as a typed failure.
+            let rateLimitSlotPush;
+            if (this.gates) {
+                if (req.preflight === 'auth') {
+                    this.gates.applyAuthGate(req.adapter, null /* v2.2 single-tenant */, req.model);
+                }
+                const manifest = this.manifests ? await this.manifests.get(req.adapter) : undefined;
+                if (manifest) {
+                    const resolved = resolveModel({ prompt: req.prompt, intelligence: req.intelligence, model: req.model, files: req.files }, manifest.tiers, manifest.defaultTier, { adapterId: req.adapter, tierLimits: manifest.tierLimits });
+                    if (resolved.limits?.rateLimit) {
+                        rateLimitSlotPush = await this.gates.applyRateLimitGate({
+                            adapter: req.adapter,
+                            prompt: req.prompt,
+                            files: req.files,
+                            principal: null,
+                            resolvedModel: resolved.model,
+                            resolvedTier: resolved.tier,
+                            rateLimit: resolved.limits.rateLimit,
+                        });
+                    }
+                }
+            }
             await this.threadStore.open(childThreadId, adapter.id);
             await this.auditLog?.record({
                 kind: 'thread.open',
@@ -76,6 +112,9 @@ export class Council {
                 // v2.3 (F3-D.2) — additive MCP-server allowlist passes through.
                 mcpServers: req.mcpServers,
             }, this.executor);
+            // v2.3.1 (B2): consume the rate-limit slot only after invoke succeeds.
+            if (rateLimitSlotPush)
+                rateLimitSlotPush();
             await this.threadStore.append(childThreadId, {
                 ts: new Date().toISOString(),
                 role: 'assistant',

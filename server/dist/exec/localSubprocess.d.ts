@@ -27,6 +27,15 @@ export declare class LocalSubprocessExecutor implements Executor {
      * cancel() is called before the subprocess has spawned.
      */
     private readonly cancelled;
+    /**
+     * v2.3.1: per-taskId queued onExit callbacks for pre-spawn cancellations.
+     * When cancel(taskId, onExit) fires before any spawn, we record the callback
+     * here. The spawn path consumes it and arms the listener on the
+     * subprocess's `close` event so the audit log gets real signal/exitCode
+     * (instead of the bogus `null, null` that the v2.3.0 implementation fired
+     * immediately).
+     */
+    private readonly pendingOnExit;
     run(req: ExecRequest): Promise<ExecResult>;
     /** Bind a taskId to the next spawn. Used by the TaskExecutor. */
     bindNextSpawn(taskId: string): (req: ExecRequest) => Promise<ExecResult>;

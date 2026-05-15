@@ -18,9 +18,29 @@ import type { Adapter } from '../core/adapter.js';
 import { AdapterError } from '../core/adapterError.js';
 import type { AuditLog } from '../core/auditLog.js';
 import type { Executor } from '../core/executor.js';
-import type { IntelligenceTier } from '../core/manifests.js';
+import type { IntelligenceTier, ManifestRegistry } from '../core/manifests.js';
 import type { TaskState, TaskStatus, TaskStore } from '../core/taskStore.js';
 import type { ThreadStore } from '../core/threadStore.js';
+import { resolveModel } from '../adapters/tierResolver.js';
+
+/**
+ * v2.3.1 (H1+H2): Council gates injected from the executor singleton so sync
+ * forks honor the same rate-limit + auth pre-flight contract that async forks
+ * already use. Provided via constructor as an optional dependency so existing
+ * tests that don't pass the executor still work.
+ */
+export interface CouncilGates {
+  applyAuthGate(adapter: string, principal: string | null, resolvedModel?: string): void;
+  applyRateLimitGate(args: {
+    adapter: string;
+    prompt: string;
+    files?: string[];
+    principal: string | null;
+    resolvedModel?: string;
+    resolvedTier: string;
+    rateLimit: NonNullable<NonNullable<import('../core/manifests.js').TierLimits>['rateLimit']>;
+  }): Promise<(() => void) | undefined>;
+}
 
 export interface AdapterLookup {
   get(id: string): Adapter | undefined;
@@ -42,7 +62,10 @@ export interface ForkRequest {
   thoughtNumber: number;
   /** v2.3 — additive MCP-server allowlist (F3-D.2). */
   mcpServers?: string[];
-  /** v2.3 — auth pre-flight opt-in (R-DIAG-D.4). Not yet wired through council path. */
+  /**
+   * v2.3 — auth pre-flight opt-in (R-DIAG-D.4). v2.3.1 (H2) wires this
+   * through the sync council path via the optional Council gates.
+   */
   preflight?: 'auth' | 'none';
 }
 
@@ -73,7 +96,14 @@ export class Council {
     private readonly threadStore: ThreadStore,
     private readonly taskStore: TaskStore,
     private readonly executor: Executor,
-    private readonly auditLog?: AuditLog
+    private readonly auditLog?: AuditLog,
+    /**
+     * v2.3.1 (H1+H2): optional pre-flight gates. When wired (via app.ts),
+     * sync forks honor `preflight: 'auth'` and the R6a-D.5 rate-limit refuse.
+     * Tests that build Council directly without gates keep working.
+     */
+    private readonly gates?: CouncilGates,
+    private readonly manifests?: ManifestRegistry
   ) {}
 
   newChain(): string {
@@ -112,6 +142,37 @@ export class Council {
     req: ForkRequest
   ): Promise<void> {
     try {
+      // v2.3.1 (H1+H2): apply the pre-flight gates if the executor was wired
+      // through. Auth gate runs when req.preflight==='auth'. Rate-limit gate
+      // runs unconditionally for rate-limited tier cells; throws AdapterError
+      // when over budget so the catch below classifies it as a typed failure.
+      let rateLimitSlotPush: (() => void) | undefined;
+      if (this.gates) {
+        if (req.preflight === 'auth') {
+          this.gates.applyAuthGate(req.adapter, null /* v2.2 single-tenant */, req.model);
+        }
+        const manifest = this.manifests ? await this.manifests.get(req.adapter) : undefined;
+        if (manifest) {
+          const resolved = resolveModel(
+            { prompt: req.prompt, intelligence: req.intelligence, model: req.model, files: req.files },
+            manifest.tiers,
+            manifest.defaultTier,
+            { adapterId: req.adapter, tierLimits: manifest.tierLimits }
+          );
+          if (resolved.limits?.rateLimit) {
+            rateLimitSlotPush = await this.gates.applyRateLimitGate({
+              adapter: req.adapter,
+              prompt: req.prompt,
+              files: req.files,
+              principal: null,
+              resolvedModel: resolved.model,
+              resolvedTier: resolved.tier,
+              rateLimit: resolved.limits.rateLimit,
+            });
+          }
+        }
+      }
+
       await this.threadStore.open(childThreadId, adapter.id);
       await this.auditLog?.record({
         kind: 'thread.open',
@@ -135,6 +196,8 @@ export class Council {
         },
         this.executor
       );
+      // v2.3.1 (B2): consume the rate-limit slot only after invoke succeeds.
+      if (rateLimitSlotPush) rateLimitSlotPush();
       await this.threadStore.append(childThreadId, {
         ts: new Date().toISOString(),
         role: 'assistant',

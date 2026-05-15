@@ -32,6 +32,11 @@ export interface AuthPathProbeOptions {
  * Pure function — no side effects, no shell execution. Caller must NOT
  * cache results across env-mutation boundaries (use 60s LRU at the call
  * site if caching is desired).
+ *
+ * v2.3.1 (B4): exhaustive switch over `AdapterId`. An unknown adapter id
+ * throws rather than silently falling through to the codex branch — the
+ * manifest registry allows arbitrary adapter ids, so this safety net catches
+ * misconfigured manifests instead of producing wrong advisories.
  */
 export declare function detectAuthPath(adapter: AdapterId, opts?: AuthPathProbeOptions): AuthPath;
 /** All auth paths an adapter MAY use; used by manifest validation. */

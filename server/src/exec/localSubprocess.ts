@@ -38,6 +38,15 @@ export class LocalSubprocessExecutor implements Executor {
    * cancel() is called before the subprocess has spawned.
    */
   private readonly cancelled = new Set<string>();
+  /**
+   * v2.3.1: per-taskId queued onExit callbacks for pre-spawn cancellations.
+   * When cancel(taskId, onExit) fires before any spawn, we record the callback
+   * here. The spawn path consumes it and arms the listener on the
+   * subprocess's `close` event so the audit log gets real signal/exitCode
+   * (instead of the bogus `null, null` that the v2.3.0 implementation fired
+   * immediately).
+   */
+  private readonly pendingOnExit = new Map<string, (code: number | null, signal: NodeJS.Signals | null) => void>();
 
   async run(req: ExecRequest): Promise<ExecResult> {
     const start = Date.now();
@@ -59,9 +68,22 @@ export class LocalSubprocessExecutor implements Executor {
 
       if (taskId) {
         this.inflight.set(taskId, proc);
-        // If a cancel arrived before this spawn, honor it now.
+        // If a cancel arrived before this spawn, honor it now AND arm the
+        // queued onExit (if any) on the actual close event so the audit log
+        // gets real signal/exitCode (v2.3.1 lower-priority fix).
         if (this.cancelled.has(taskId)) {
           this.cancelled.delete(taskId);
+          const queuedOnExit = this.pendingOnExit.get(taskId);
+          if (queuedOnExit) {
+            this.pendingOnExit.delete(taskId);
+            proc.once('close', (code, signal) => {
+              try {
+                queuedOnExit(code, signal);
+              } catch {
+                /* never throw to caller */
+              }
+            });
+          }
           killGroup(proc.pid, 'SIGTERM');
           setTimeout(() => killGroup(proc.pid, 'SIGKILL'), KILL_GRACE_MS).unref();
         }
@@ -141,14 +163,30 @@ export class LocalSubprocessExecutor implements Executor {
   ): void {
     const proc = this.inflight.get(taskId);
     if (!proc) {
+      // v2.3.1: queue the cancellation request AND the onExit callback. When
+      // the next spawn for this taskId arrives, both are consumed: SIGTERM
+      // fires immediately, and the onExit is armed on the real close event so
+      // the audit log records the actual signal/exitCode instead of `null,null`.
       this.cancelled.add(taskId);
-      // No subprocess yet → "cleanup boundary is now"; invoke onExit immediately.
       if (onExit) {
-        try {
-          onExit(null, null);
-        } catch {
-          /* never throw to caller */
-        }
+        this.pendingOnExit.set(taskId, onExit);
+        // Fallback: if no spawn arrives within 5s (runTask threw early, the
+        // task was never going to spawn), fire onExit with null,null so the
+        // task.terminated audit event still records something. Bounded — if a
+        // real spawn DOES arrive before this fires, the close handler clears
+        // pendingOnExit first and this becomes a no-op.
+        setTimeout(() => {
+          const stillQueued = this.pendingOnExit.get(taskId) === onExit;
+          if (stillQueued) {
+            this.pendingOnExit.delete(taskId);
+            this.cancelled.delete(taskId);
+            try {
+              onExit(null, null);
+            } catch {
+              /* never throw to caller */
+            }
+          }
+        }, 5_000).unref();
       }
       return;
     }
