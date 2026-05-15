@@ -152,6 +152,8 @@ async function loadSkillFile(path, name, source) {
     const model = typeof fm.model === 'string' ? fm.model : undefined;
     const mcpServers = parseStringList(fm.mcp_servers);
     const preflight = fm.preflight === 'auth' || fm.preflight === 'none' ? fm.preflight : undefined;
+    const authPath = typeof fm.auth_path === 'string' ? fm.auth_path : undefined;
+    const bypassRateLimit = typeof fm.bypass_rate_limit === 'boolean' ? fm.bypass_rate_limit : undefined;
     return {
         name,
         adapter: fm.adapter,
@@ -166,6 +168,8 @@ async function loadSkillFile(path, name, source) {
         pinsModel: model ?? null,
         mcpServers,
         preflight,
+        authPath,
+        bypassRateLimit,
     };
 }
 /**

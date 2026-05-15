@@ -38,6 +38,10 @@ export interface ResolvedSkill {
   mcpServers?: string[];
   /** v2.3 — auth pre-flight opt-in from skill frontmatter (R-DIAG-D.4). */
   preflight?: 'auth' | 'none';
+  /** v2.3.3 — auth-path override from skill frontmatter. */
+  authPath?: string;
+  /** v2.3.3 — opt-out of rate-limit refuse from skill frontmatter. */
+  bypassRateLimit?: boolean;
 }
 
 export interface SkillResolutionInput {
@@ -143,6 +147,8 @@ export async function resolveSkill(
     substitutedFrom,
     mcpServers: skill.mcpServers,
     preflight: skill.preflight,
+    authPath: skill.authPath,
+    bypassRateLimit: skill.bypassRateLimit,
   };
 }
 

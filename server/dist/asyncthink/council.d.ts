@@ -34,6 +34,10 @@ export interface CouncilGates {
         resolvedModel?: string;
         resolvedTier: string;
         rateLimit: NonNullable<NonNullable<import('../core/manifests.js').TierLimits>['rateLimit']>;
+        /** v2.3.3 — auth-path override (skips detectAuthPath). */
+        authPathOverride?: string;
+        /** v2.3.3 — opt out of the gate; returns undefined without throwing. */
+        bypassRateLimit?: boolean;
     }): Promise<(() => void) | undefined>;
 }
 export interface AdapterLookup {
@@ -60,6 +64,10 @@ export interface ForkRequest {
      * through the sync council path via the optional Council gates.
      */
     preflight?: 'auth' | 'none';
+    /** v2.3.3 — auth-path override for the rate-limit gate. */
+    authPath?: string;
+    /** v2.3.3 — opt-out of the rate-limit refuse on this fork. */
+    bypassRateLimit?: boolean;
 }
 export interface ChainStatus {
     pending: string[];

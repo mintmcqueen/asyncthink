@@ -242,6 +242,67 @@ describe('B2 — pre-flight refuse: dim="requests"', () => {
   });
 });
 
+describe('v2.3.3 — authPath override and bypassRateLimit', () => {
+  it('bypassRateLimit: true skips the pre-flight refuse', async () => {
+    const { exec } = buildExec(fakeClaudeManifest());
+    const prev = process.env.ANTHROPIC_API_KEY;
+    process.env.ANTHROPIC_API_KEY = 'sk-test';
+    try {
+      const prompt = 'x'.repeat(10000 * 4); // ~10k tokens; allowance=3 normally
+      for (let i = 0; i < 3; i++) {
+        await exec.start({ adapter: 'claude', prompt, intelligence: 'med' });
+      }
+      // Without bypass this 4th would throw kind:'rate-limit'.
+      const r = await exec.start({
+        adapter: 'claude',
+        prompt,
+        intelligence: 'med',
+        bypassRateLimit: true,
+      });
+      expect(r.status).toBe('working');
+    } finally {
+      if (prev === undefined) delete process.env.ANTHROPIC_API_KEY;
+      else process.env.ANTHROPIC_API_KEY = prev;
+    }
+  });
+
+  it('authPath override routes the gate lookup to a different cell', async () => {
+    // 'api' path is rate-limited (allowance=3 at 30k/10k); 'subscription'
+    // path is class:'standard' → no gate. Env has ANTHROPIC_API_KEY so
+    // detect picks 'api' by default; the caller's override picks 'subscription'.
+    const manifest = fakeClaudeManifest();
+    manifest.tierLimits!.med!.rateLimit!.byAuthPath.subscription = {
+      class: 'standard',
+    };
+    const { exec } = buildExec(manifest);
+    const prev = process.env.ANTHROPIC_API_KEY;
+    process.env.ANTHROPIC_API_KEY = 'sk-test';
+    try {
+      const prompt = 'x'.repeat(10000 * 4); // ~10k tokens; api allowance=3
+      // Burn the 'api' budget with 3 forks (no override → 'api' path).
+      for (let i = 0; i < 3; i++) {
+        await exec.start({ adapter: 'claude', prompt, intelligence: 'med' });
+      }
+      // 4th without override → 'api' → refused.
+      await expect(
+        exec.start({ adapter: 'claude', prompt, intelligence: 'med' })
+      ).rejects.toMatchObject({ kind: 'rate-limit' });
+      // 4th with authPath:'subscription' → standard class → no gate → allowed.
+      // (The api budget is still burned, but we routed elsewhere.)
+      const r = await exec.start({
+        adapter: 'claude',
+        prompt,
+        intelligence: 'med',
+        authPath: 'subscription',
+      });
+      expect(r.status).toBe('working');
+    } finally {
+      if (prev === undefined) delete process.env.ANTHROPIC_API_KEY;
+      else process.env.ANTHROPIC_API_KEY = prev;
+    }
+  });
+});
+
 describe('B2 — pre-flight refuse: dim="output" is not gated', () => {
   it('does not enforce a gate when cap.dim is "output"', async () => {
     const manifest: AdapterManifest = {

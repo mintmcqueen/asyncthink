@@ -63,6 +63,10 @@ export interface Skill {
    * fails fast with AdapterError(kind='auth') on probe failure.
    */
   preflight?: 'auth' | 'none';
+  /** v2.3.3 — auth-path override for the rate-limit gate. */
+  authPath?: string;
+  /** v2.3.3 — opt-out of the rate-limit refuse for invocations using this skill. */
+  bypassRateLimit?: boolean;
 }
 
 export interface SkillRegistry {

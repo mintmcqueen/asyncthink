@@ -111,7 +111,20 @@ export class Delegate {
                             resolvedModel: resolved.model,
                             resolvedTier: resolved.tier,
                             rateLimit: resolved.limits.rateLimit,
+                            // v2.3.3 — caller flexibility levers.
+                            authPathOverride: req.authPath,
+                            bypassRateLimit: req.bypassRateLimit,
                         });
+                        // v2.3.3: sync-delegate bypass audit (no taskId — record under threadId).
+                        if (req.bypassRateLimit) {
+                            await this.auditLog?.record({
+                                kind: 'task.bypass_rate_limit',
+                                taskId: threadId,
+                                adapter: req.adapter,
+                                authPath: req.authPath,
+                                reason: 'sync-delegate-opt-out',
+                            });
+                        }
                     }
                 }
             }
@@ -201,6 +214,9 @@ export class Delegate {
             detached: true, // async delegates are detached by default (independent of any chain)
             principal: req.principal ?? null,
             ttlMs: req.ttlMs,
+            // v2.3.3 — caller flexibility levers.
+            authPath: req.authPath,
+            bypassRateLimit: req.bypassRateLimit,
             credentials: req.credentials,
             threadId: req.threadId,
             skill: req.skill,

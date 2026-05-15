@@ -59,6 +59,17 @@ export interface TaskExecutorRequest {
      * executor runs a local probe BEFORE allocating a task row.
      */
     preflight?: 'auth' | 'none';
+    /**
+     * v2.3.3 — auth-path override for the rate-limit gate. When set, the gate
+     * uses the advisory at this path instead of `detectAuthPath()`. Doesn't
+     * affect the actual adapter spawn — only the advisory lookup.
+     */
+    authPath?: string;
+    /**
+     * v2.3.3 — opt-out of the pre-flight rate-limit refuse. When true, the
+     * gate logs an audit event and lets the call through unchecked.
+     */
+    bypassRateLimit?: boolean;
 }
 export interface TaskExecutorResultEnvelope {
     /** Adapter response text. */

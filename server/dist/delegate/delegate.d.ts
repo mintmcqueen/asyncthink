@@ -73,6 +73,17 @@ export interface DelegateRequest {
      * probe BEFORE allocating a task row. Only applies in async mode.
      */
     preflight?: 'auth' | 'none';
+    /**
+     * v2.3.3 — auth-path override for the rate-limit gate. Use when the
+     * env-derived authPath misclassifies the call (e.g., subscription auth
+     * with ANTHROPIC_API_KEY set).
+     */
+    authPath?: string;
+    /**
+     * v2.3.3 — opt-out of the rate-limit refuse. Caller assumes 429 risk.
+     * Emits a `task.bypass_rate_limit` audit event for observability.
+     */
+    bypassRateLimit?: boolean;
 }
 export interface DelegateResponse {
     threadId: string;
