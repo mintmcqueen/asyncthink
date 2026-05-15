@@ -6,10 +6,17 @@
  *
  * v3 swap point: this is where DI substitutes RemoteCompanionExecutor and
  * Firestore-backed stores when the cloud server is built.
+ *
+ * v2.2 additions:
+ *   - `taskExecutor` singleton (LocalInProcessTaskExecutor) for delegate-
+ *     async + delegate forks (Phase 4 unifies Council to use this).
+ *   - `manifestRegistry` is now passed into FsSkillRegistry so pinIsCurrent
+ *     derivation works (R6b-D.3).
  */
 import { AdapterRegistry } from './adapters/index.js';
 import { FsManifestRegistry } from './adapters/registry.js';
 import { LocalSubprocessExecutor } from './exec/localSubprocess.js';
+import { LocalInProcessTaskExecutor } from './exec/localInProcessTaskExecutor.js';
 import { JsonlThreadStore } from './stores/jsonlThreadStore.js';
 import { FsTaskStore } from './stores/fsTaskStore.js';
 import { FsSkillRegistry } from './stores/skillRegistry.js';
@@ -22,10 +29,20 @@ const manifestRegistry = new FsManifestRegistry();
 const executor = new LocalSubprocessExecutor();
 const threadStore = new JsonlThreadStore();
 const taskStore = new FsTaskStore();
-const skillRegistry = new FsSkillRegistry();
+const skillRegistry = new FsSkillRegistry({ manifests: manifestRegistry });
 const auditLog = new JsonlAuditLog();
-const delegate = new Delegate(adapters, threadStore, executor, auditLog);
-const council = new Council(adapters, threadStore, taskStore, executor, auditLog);
+const taskExecutor = new LocalInProcessTaskExecutor({
+    adapters,
+    executor,
+    taskStore,
+    threadStore,
+    auditLog,
+    manifests: manifestRegistry,
+});
+const delegate = new Delegate(adapters, threadStore, executor, auditLog, taskExecutor, manifestRegistry);
+// v2.3.1 (H1+H2): wire pre-flight gates into Council so sync forks honor the
+// same rate-limit + auth-preflight contract as async forks.
+const council = new Council(adapters, threadStore, taskStore, executor, auditLog, taskExecutor, manifestRegistry);
 const thinking = new AsyncThinkingServer();
 export function getAdapters() {
     return adapters;
@@ -56,6 +73,9 @@ export function getAuditLog() {
 }
 export function getManifestRegistry() {
     return manifestRegistry;
+}
+export function getTaskExecutor() {
+    return taskExecutor;
 }
 /**
  * Cross-registry validation: surface skill ↔ adapter conflicts as stderr

@@ -8,6 +8,65 @@
     "low": "gemini-2.5-flash-lite"
   },
   "defaultTier": "med",
+  "tierLimits": {
+    "high": {
+      "maxContext": 1000000,
+      "rateLimitClass": "standard",
+      "rateLimit": {
+        "default": "ai-studio",
+        "lastVerified": "2026-04-29",
+        "byAuthPath": {
+          "ai-studio": {
+            "class": "rate-limited",
+            "cap": { "tokens": 250, "windowSec": 86400, "dim": "requests" },
+            "evidenceUrl": "https://ai.google.dev/gemini-api/docs/rate-limits",
+            "notes": "Tier-1 paid; sparse public docs. Forum reports ~25-50 RPM, ~250 RPD on preview models."
+          },
+          "vertex": { "class": "standard", "notes": "Vertex AI quota per GCP project." }
+        }
+      },
+      "expectedLatencyMsP50": 18000
+    },
+    "med": {
+      "maxContext": 1000000,
+      "rateLimitClass": "standard",
+      "rateLimit": {
+        "default": "ai-studio",
+        "lastVerified": "2026-04-29",
+        "byAuthPath": {
+          "ai-studio": {
+            "class": "standard",
+            "cap": { "tokens": 1000000, "windowSec": 60, "dim": "input" },
+            "evidenceUrl": "https://ai.google.dev/gemini-api/docs/rate-limits",
+            "notes": "AI Studio Tier-1 paid: 300 RPM / 1M TPM-input on gemini-2.5-flash."
+          },
+          "vertex": { "class": "standard", "notes": "Vertex AI quota per GCP project." }
+        }
+      },
+      "expectedLatencyMsP50": 6000
+    },
+    "low": {
+      "maxContext": 1000000,
+      "rateLimitClass": "standard",
+      "rateLimit": {
+        "default": "ai-studio",
+        "lastVerified": "2026-04-29",
+        "byAuthPath": {
+          "ai-studio": {
+            "class": "standard",
+            "evidenceUrl": "https://ai.google.dev/gemini-api/docs/rate-limits",
+            "notes": "AI Studio Tier-1 paid: 300 RPM on gemini-2.5-flash-lite; TPM not separately published."
+          },
+          "vertex": { "class": "standard", "notes": "Vertex AI quota per GCP project." }
+        }
+      },
+      "expectedLatencyMsP50": 3000
+    }
+  },
+  "mcp": {
+    "allowlist": ["sequentialthinking", "context7"],
+    "catalog": ["sequentialthinking", "context7", "repo-rag"]
+  },
   "requiredEnv": ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
   "defaultTimeoutMs": 180000,
   "description": "Google Gemini CLI in --approval-mode plan (read-only navigation) for fast metacognitive research with native session resume."

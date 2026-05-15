@@ -12,6 +12,10 @@ import { promises as fs } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import type { AdapterManifest, ManifestRegistry } from '../core/manifests.js';
+import { authPathsFor, type AdapterId, type AuthPath } from './authPath.js';
+
+const RATE_LIMIT_CLASSES = ['standard', 'rate-limited', 'unlimited'] as const;
+const CAP_DIMS = ['input', 'output', 'requests', 'messages'] as const;
 
 const REQUIRED_FIELDS: (keyof AdapterManifest)[] = [
   'id',
@@ -91,7 +95,128 @@ function validate(value: unknown, path: string): AdapterManifest {
       `Manifest at ${path} has invalid defaultTier (must be one of ${VALID_TIERS.join(', ')})`
     );
   }
+  // Optional tierLimits validation (R6a-D.1).
+  if (obj.tierLimits !== undefined) {
+    if (typeof obj.tierLimits !== 'object' || obj.tierLimits === null) {
+      throw new Error(`Manifest at ${path} has invalid tierLimits (must be object or absent)`);
+    }
+    const limits = obj.tierLimits as Record<string, unknown>;
+    for (const tier of VALID_TIERS) {
+      const entry = limits[tier];
+      if (entry === undefined) continue;
+      if (typeof entry !== 'object' || entry === null) {
+        throw new Error(`Manifest at ${path} tierLimits["${tier}"] must be an object`);
+      }
+      const e = entry as Record<string, unknown>;
+      if (e.maxContext !== undefined && (typeof e.maxContext !== 'number' || e.maxContext <= 0)) {
+        throw new Error(
+          `Manifest at ${path} tierLimits["${tier}"].maxContext must be a positive number`
+        );
+      }
+      if (
+        e.rateLimitClass !== undefined &&
+        e.rateLimitClass !== 'standard' &&
+        e.rateLimitClass !== 'rate-limited' &&
+        e.rateLimitClass !== 'unlimited'
+      ) {
+        throw new Error(
+          `Manifest at ${path} tierLimits["${tier}"].rateLimitClass must be 'standard'|'rate-limited'|'unlimited'`
+        );
+      }
+      if (
+        e.expectedLatencyMsP50 !== undefined &&
+        (typeof e.expectedLatencyMsP50 !== 'number' || e.expectedLatencyMsP50 < 0)
+      ) {
+        throw new Error(
+          `Manifest at ${path} tierLimits["${tier}"].expectedLatencyMsP50 must be a non-negative number`
+        );
+      }
+      // v2.3 — rateLimit.byAuthPath validation (R6a-D.4).
+      if (e.rateLimit !== undefined) {
+        validateRateLimit(e.rateLimit, path, tier, obj.id as string);
+      }
+    }
+  }
+  // v2.3 — mcp.allowlist / mcp.catalog (F3-D.2).
+  if (obj.mcp !== undefined) {
+    if (typeof obj.mcp !== 'object' || obj.mcp === null) {
+      throw new Error(`Manifest at ${path} mcp must be an object`);
+    }
+    const m = obj.mcp as Record<string, unknown>;
+    if (!Array.isArray(m.allowlist) || !m.allowlist.every((s) => typeof s === 'string')) {
+      throw new Error(`Manifest at ${path} mcp.allowlist must be string[]`);
+    }
+    if (
+      m.catalog !== undefined &&
+      (!Array.isArray(m.catalog) || !m.catalog.every((s) => typeof s === 'string'))
+    ) {
+      throw new Error(`Manifest at ${path} mcp.catalog must be string[] if present`);
+    }
+  }
   return obj as unknown as AdapterManifest;
+}
+
+function validateRateLimit(rl: unknown, path: string, tier: string, adapterId: string): void {
+  if (typeof rl !== 'object' || rl === null) {
+    throw new Error(`Manifest at ${path} tierLimits["${tier}"].rateLimit must be object`);
+  }
+  const r = rl as Record<string, unknown>;
+  if (
+    typeof r.lastVerified !== 'string' ||
+    !/^\d{4}-\d{2}-\d{2}/.test(r.lastVerified)
+  ) {
+    throw new Error(
+      `Manifest at ${path} tierLimits["${tier}"].rateLimit.lastVerified must be ISODate string`
+    );
+  }
+  if (typeof r.byAuthPath !== 'object' || r.byAuthPath === null) {
+    throw new Error(
+      `Manifest at ${path} tierLimits["${tier}"].rateLimit.byAuthPath must be object`
+    );
+  }
+  const ap = r.byAuthPath as Record<string, unknown>;
+  const validPaths = new Set<AuthPath>(authPathsFor(adapterId as AdapterId));
+  for (const key of Object.keys(ap)) {
+    if (!validPaths.has(key as AuthPath)) {
+      throw new Error(
+        `Manifest at ${path} tierLimits["${tier}"].rateLimit.byAuthPath key "${key}" not valid for adapter "${adapterId}". Valid: ${[...validPaths].join(', ')}`
+      );
+    }
+    const advisory = ap[key];
+    if (typeof advisory !== 'object' || advisory === null) {
+      throw new Error(
+        `Manifest at ${path} tierLimits["${tier}"].rateLimit.byAuthPath["${key}"] must be object`
+      );
+    }
+    const a = advisory as Record<string, unknown>;
+    if (!RATE_LIMIT_CLASSES.includes(a.class as (typeof RATE_LIMIT_CLASSES)[number])) {
+      throw new Error(
+        `Manifest at ${path} tierLimits["${tier}"].rateLimit.byAuthPath["${key}"].class must be one of ${RATE_LIMIT_CLASSES.join(',')}`
+      );
+    }
+    if (a.cap !== undefined) {
+      const c = a.cap as Record<string, unknown>;
+      if (typeof c.tokens !== 'number' || c.tokens <= 0) {
+        throw new Error(`...cap.tokens must be positive number (${path} tier=${tier} path=${key})`);
+      }
+      if (typeof c.windowSec !== 'number' || c.windowSec <= 0) {
+        throw new Error(`...cap.windowSec must be positive number (${path} tier=${tier} path=${key})`);
+      }
+      if (!CAP_DIMS.includes(c.dim as (typeof CAP_DIMS)[number])) {
+        throw new Error(`...cap.dim must be one of ${CAP_DIMS.join(',')} (${path} tier=${tier} path=${key})`);
+      }
+    }
+  }
+  if (typeof r.default !== 'string' || !validPaths.has(r.default as AuthPath)) {
+    throw new Error(
+      `Manifest at ${path} tierLimits["${tier}"].rateLimit.default "${String(r.default)}" not in byAuthPath keys`
+    );
+  }
+  if (!(r.default in ap)) {
+    throw new Error(
+      `Manifest at ${path} tierLimits["${tier}"].rateLimit.default "${String(r.default)}" must appear in byAuthPath`
+    );
+  }
 }
 
 function defaultManifestsDir(): string {

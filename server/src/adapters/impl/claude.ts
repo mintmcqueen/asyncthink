@@ -19,6 +19,7 @@
 
 import { randomUUID } from 'crypto';
 import type { Adapter, AdapterInvocation, AdapterResult } from '../../core/adapter.js';
+import { detectClaudeError } from '../../core/adapterError.js';
 import type { Executor } from '../../core/executor.js';
 import type { IntelligenceTier } from '../../core/manifests.js';
 import { resolveModel } from '../tierResolver.js';
@@ -56,9 +57,9 @@ export class ClaudeAdapter implements Adapter {
   }
 
   async invoke(inv: AdapterInvocation, exec: Executor): Promise<AdapterResult> {
-    const model = resolveModel(inv, this.tiers, this.defaultTier);
+    const resolved = resolveModel(inv, this.tiers, this.defaultTier, { adapterId: this.id });
     const prompt = renderPrompt(inv);
-    const argv: string[] = ['--print', '--model', model, prompt];
+    const argv: string[] = ['--print', '--model', resolved.model, prompt];
 
     const result = await exec.run({
       bin: 'claude',
@@ -67,6 +68,25 @@ export class ClaudeAdapter implements Adapter {
       env: { ...process.env, ...(inv.env ?? {}) } as Record<string, string>,
       timeoutMs: inv.timeoutMs ?? this.defaultTimeoutMs,
     });
+
+    // v2.3 (R-DIAG-D.2): run detector for known failure shapes. v2.3.1 (H3):
+    // gate on non-zero exit code (or executor-synthesized timeout marker). A
+    // successful claude response can legitimately mention "rate limit reached"
+    // in prose; running the permissive substring detector on success-shaped
+    // output would throw away valid responses.
+    const isTimeout = result.exitCode === 124 && /\[timeout after \d+ms\]/.test(result.stderr);
+    if (result.exitCode !== 0 || isTimeout) {
+      const err = detectClaudeError(
+        {
+          stdout: result.stdout,
+          stderr: result.stderr,
+          exitCode: result.exitCode,
+          durationMs: result.durationMs,
+        },
+        resolved.model
+      );
+      if (err) throw err;
+    }
 
     return {
       text: result.stdout,

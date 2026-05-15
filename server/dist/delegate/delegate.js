@@ -10,23 +10,51 @@
  *    turn's sessionId; the adapter uses its CLI's resume primitive.
  *  - 'replay' adapters (claude, gemini): the orchestrator serializes prior
  *    turns into the prompt itself before invoking.
+ *
+ * v2.2: optional `async: true` mode (R4-D). When set, the Delegate routes
+ * the call through the injected TaskExecutor and returns an AsyncDelegate
+ * envelope ({taskId, status: 'working'}) instead of the synchronous
+ * DelegateResponse. Callers poll via `tasks/get`, block via `tasks/result`,
+ * or cancel via `tasks/cancel`. The synchronous path is unchanged.
  */
 import { randomUUID } from 'crypto';
+import { CredentialsNotSupportedError, } from '../core/taskExecutor.js';
+import { resolveModel } from '../adapters/tierResolver.js';
 const REMINDER_OPEN = 'Thread is open. Call delegate_close({threadId}) when this conversation is done. ' +
     'Idle threads are auto-swept after 6 hours.';
 const REMINDER_CLOSED = 'Thread closed.';
+const REMINDER_ASYNC = 'Async task created. Poll status via tasks/get({taskId}); fetch result via ' +
+    'tasks/result({taskId}); cancel via tasks/cancel({taskId}). Idle tasks expire per ' +
+    'category TTL (working/completed 60m, failed 10m, cancelled 5m).';
 export class Delegate {
     adapters;
     threadStore;
     executor;
     auditLog;
-    constructor(adapters, threadStore, executor, auditLog) {
+    taskExecutor;
+    manifests;
+    constructor(adapters, threadStore, executor, auditLog, taskExecutor, 
+    /**
+     * v2.3.1 (H1+H2): optional manifest registry. When provided alongside a
+     * gate-bearing taskExecutor (LocalInProcessTaskExecutor), sync delegate
+     * applies the same rate-limit + auth pre-flight gates that the async path
+     * runs in executor.start().
+     */
+    manifests) {
         this.adapters = adapters;
         this.threadStore = threadStore;
         this.executor = executor;
         this.auditLog = auditLog;
+        this.taskExecutor = taskExecutor;
+        this.manifests = manifests;
     }
+    /** Synchronous turn — returns the assistant response inline. */
     async run(req) {
+        if (req.credentials !== undefined &&
+            req.credentials !== '' &&
+            req.credentials !== 'default') {
+            throw new CredentialsNotSupportedError(req.credentials);
+        }
         const adapter = this.adapters.get(req.adapter);
         if (!adapter) {
             const known = this.adapters.list().map((a) => a.id).join(', ');
@@ -60,6 +88,34 @@ export class Delegate {
             content: req.prompt,
         };
         await this.threadStore.append(threadId, userTurn);
+        // v2.3.1 (H1+H2): apply pre-flight gates on the sync path too. Reuses the
+        // executor's shared state (recentSpawns / authProbeCache) so async and
+        // sync forks share the same window+token budget. Gracefully no-ops when
+        // the manifest registry or task executor isn't wired (e.g. unit tests).
+        let rateLimitSlotPush;
+        const gateBearing = this.taskExecutor;
+        if (gateBearing && typeof gateBearing.applyAuthGate === 'function') {
+            if (req.preflight === 'auth') {
+                gateBearing.applyAuthGate(req.adapter, req.principal ?? null, req.model);
+            }
+            if (this.manifests) {
+                const manifest = await this.manifests.get(req.adapter);
+                if (manifest) {
+                    const resolved = resolveModel({ prompt: req.prompt, intelligence: req.intelligence, model: req.model, files: req.files }, manifest.tiers, manifest.defaultTier, { adapterId: req.adapter, tierLimits: manifest.tierLimits });
+                    if (resolved.limits?.rateLimit) {
+                        rateLimitSlotPush = await gateBearing.applyRateLimitGate({
+                            adapter: req.adapter,
+                            prompt: req.prompt,
+                            files: req.files,
+                            principal: req.principal ?? null,
+                            resolvedModel: resolved.model,
+                            resolvedTier: resolved.tier,
+                            rateLimit: resolved.limits.rateLimit,
+                        });
+                    }
+                }
+            }
+        }
         const result = await adapter.invoke({
             prompt: effectivePrompt,
             files: req.files,
@@ -68,7 +124,14 @@ export class Delegate {
             timeoutMs: req.timeoutMs,
             intelligence: req.intelligence,
             model: req.model,
+            // v2.3.1 (B1) — sync delegate must forward the additive allowlist too;
+            // previously only Council.runFork was wired (sync forks), so async
+            // delegate and sync delegate silently dropped the field.
+            mcpServers: req.mcpServers,
         }, this.executor);
+        // v2.3.1 (B2): consume the rate-limit slot only after invoke succeeds.
+        if (rateLimitSlotPush)
+            rateLimitSlotPush();
         const assistantTurn = {
             ts: new Date().toISOString(),
             role: 'assistant',
@@ -106,6 +169,51 @@ export class Delegate {
             exitCode: result.exitCode,
             durationMs: result.durationMs,
             reminder: closed ? REMINDER_CLOSED : REMINDER_OPEN,
+        };
+    }
+    /**
+     * Async turn (v2.2). Routes through the injected TaskExecutor; returns
+     * `{taskId, status}` immediately. Subsequent polling/blocking happens via
+     * `tasks/get`, `tasks/result`, `tasks/cancel`.
+     *
+     * Idempotency: if `req.idempotencyKey` is supplied and a non-terminal
+     * task with the same `(idempotencyKey, principal)` exists, the existing
+     * taskId is returned (R-DUR-D.3).
+     */
+    async runAsync(req) {
+        if (!this.taskExecutor) {
+            throw new Error('Async delegate requested but no TaskExecutor was injected.');
+        }
+        const adapter = this.adapters.get(req.adapter);
+        if (!adapter) {
+            const known = this.adapters.list().map((a) => a.id).join(', ');
+            throw new Error(`Unknown adapter "${req.adapter}". Registered: ${known}`);
+        }
+        const state = await this.taskExecutor.start({
+            adapter: req.adapter,
+            prompt: req.prompt,
+            files: req.files,
+            intelligence: req.intelligence,
+            model: req.model,
+            timeoutMs: req.timeoutMs,
+            cwd: req.cwd,
+            idempotencyKey: req.idempotencyKey,
+            detached: true, // async delegates are detached by default (independent of any chain)
+            principal: req.principal ?? null,
+            ttlMs: req.ttlMs,
+            credentials: req.credentials,
+            threadId: req.threadId,
+            skill: req.skill,
+            // v2.3 (F3-D.2, R-DIAG-D.4) — forward additive allowlist + preflight opt-in.
+            // Fields are now first-class on TaskExecutorRequest (v2.3.1 B1).
+            mcpServers: req.mcpServers,
+            preflight: req.preflight,
+        });
+        return {
+            taskId: state.taskId,
+            adapter: state.adapter,
+            status: state.status,
+            reminder: REMINDER_ASYNC,
         };
     }
 }

@@ -100,6 +100,24 @@ describe('ClaudeAdapter', () => {
     const out = await a.invoke({ prompt: 'p', sessionId: 'thread-7' }, exec);
     expect(out.sessionId).toBe('thread-7');
   });
+
+  it('does NOT throw rate-limit AdapterError on successful response that mentions "rate limit reached" in prose (v2.3.1 H3)', async () => {
+    const a = new ClaudeAdapter();
+    // exitCode 0 + a legitimate response that happens to discuss rate limits.
+    const exec = new RecordingExecutor([
+      {
+        stdout:
+          "Yes, your concern is valid — 'Rate limit reached' is the exact phrase Anthropic emits when an organization hits its TPM cap on haiku.",
+        stderr: '',
+        exitCode: 0,
+        durationMs: 5,
+      },
+    ]);
+    const out = await a.invoke({ prompt: 'is "rate limit reached" the exact phrase?' }, exec);
+    // Should pass through as a successful response, NOT be reclassified as rate-limit.
+    expect(out.exitCode).toBe(0);
+    expect(out.text).toContain('Rate limit reached');
+  });
 });
 
 describe('GeminiAdapter', () => {
@@ -181,7 +199,7 @@ describe('GeminiAdapter', () => {
     expect(out.text).toBe('PONG');
   });
 
-  it('returns empty when stdout is operational noise without JSON (F2)', async () => {
+  it('throws AdapterError(silent-failure) when stdout is operational noise without JSON (v2.3 F3-D.3)', async () => {
     const a = new GeminiAdapter();
     const exec = new RecordingExecutor([
       {
@@ -191,8 +209,11 @@ describe('GeminiAdapter', () => {
         durationMs: 1,
       },
     ]);
-    const out = await a.invoke({ prompt: 'PING' }, exec);
-    expect(out.text).toBe('');
+    await expect(a.invoke({ prompt: 'PING' }, exec)).rejects.toMatchObject({
+      name: 'AdapterError',
+      kind: 'silent-failure',
+      adapter: 'gemini',
+    });
   });
 
   it('handles JSON with nested braces and escaped strings (F2)', async () => {

@@ -17,6 +17,7 @@
  * default in --print mode.
  */
 import { randomUUID } from 'crypto';
+import { detectClaudeError } from '../../core/adapterError.js';
 import { resolveModel } from '../tierResolver.js';
 // v2.1.1 note: `high` was claude-opus-4-7 but Anthropic's org-level cap of
 // 30k input tokens/minute on opus-4-7 makes it unreliable for non-trivial
@@ -42,9 +43,9 @@ export class ClaudeAdapter {
         this.defaultTier = opts.defaultTier ?? 'med';
     }
     async invoke(inv, exec) {
-        const model = resolveModel(inv, this.tiers, this.defaultTier);
+        const resolved = resolveModel(inv, this.tiers, this.defaultTier, { adapterId: this.id });
         const prompt = renderPrompt(inv);
-        const argv = ['--print', '--model', model, prompt];
+        const argv = ['--print', '--model', resolved.model, prompt];
         const result = await exec.run({
             bin: 'claude',
             argv,
@@ -52,6 +53,22 @@ export class ClaudeAdapter {
             env: { ...process.env, ...(inv.env ?? {}) },
             timeoutMs: inv.timeoutMs ?? this.defaultTimeoutMs,
         });
+        // v2.3 (R-DIAG-D.2): run detector for known failure shapes. v2.3.1 (H3):
+        // gate on non-zero exit code (or executor-synthesized timeout marker). A
+        // successful claude response can legitimately mention "rate limit reached"
+        // in prose; running the permissive substring detector on success-shaped
+        // output would throw away valid responses.
+        const isTimeout = result.exitCode === 124 && /\[timeout after \d+ms\]/.test(result.stderr);
+        if (result.exitCode !== 0 || isTimeout) {
+            const err = detectClaudeError({
+                stdout: result.stdout,
+                stderr: result.stderr,
+                exitCode: result.exitCode,
+                durationMs: result.durationMs,
+            }, resolved.model);
+            if (err)
+                throw err;
+        }
         return {
             text: result.stdout,
             sessionId: inv.sessionId ?? randomUUID(),

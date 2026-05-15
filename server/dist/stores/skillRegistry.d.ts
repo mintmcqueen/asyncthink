@@ -15,16 +15,26 @@
  *
  * Anything between the first `---` and the next `---` is the frontmatter;
  * content after the closing `---` is the prompt body.
+ *
+ * v2.2:
+ *   - Parses optional `credentials: <profile>` field (R-CRED-D.1).
+ *   - Derives `pinsModel` / `pinIsCurrent` against an injected manifest
+ *     registry (R6b-D.3). When no registry is supplied, `pinIsCurrent` is
+ *     left undefined.
  */
+import type { ManifestRegistry } from '../core/manifests.js';
 import type { Skill, SkillRegistry } from '../core/skillRegistry.js';
 export interface FsSkillRegistryOptions {
     pluginSkillsDir?: string;
     userSkillsDir?: string;
+    /** Optional manifest registry for pinIsCurrent derivation (R6b-D.3). */
+    manifests?: ManifestRegistry;
 }
 export declare class FsSkillRegistry implements SkillRegistry {
     private cache;
     private readonly pluginSkillsDir;
     private readonly userSkillsDir;
+    private readonly manifests?;
     constructor(opts?: FsSkillRegistryOptions);
     list(): Promise<Skill[]>;
     get(name: string): Promise<Skill | undefined>;

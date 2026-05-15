@@ -8,6 +8,84 @@
     "low": "claude-haiku-4-5-20251001"
   },
   "defaultTier": "med",
+  "tierLimits": {
+    "high": {
+      "maxContext": 200000,
+      "rateLimitClass": "standard",
+      "rateLimit": {
+        "default": "subscription",
+        "lastVerified": "2026-04-29",
+        "byAuthPath": {
+          "subscription": {
+            "class": "standard",
+            "notes": "Claude Code subscription billing; no API metering visibility."
+          },
+          "api": {
+            "class": "rate-limited",
+            "cap": { "tokens": 30000, "windowSec": 60, "dim": "input" },
+            "evidenceUrl": "https://platform.claude.com/docs/en/api/rate-limits",
+            "notes": "Anthropic Tier-1 API ITPM cap on sonnet-4-6; raises to 450k at Tier 2."
+          },
+          "vertex": {
+            "class": "standard",
+            "notes": "Vertex AI quota per GCP project; configure at Vertex quotas page."
+          },
+          "bedrock": {
+            "class": "standard",
+            "notes": "AWS Bedrock service quotas per region."
+          }
+        }
+      },
+      "expectedLatencyMsP50": 12000
+    },
+    "med": {
+      "maxContext": 200000,
+      "rateLimitClass": "standard",
+      "rateLimit": {
+        "default": "subscription",
+        "lastVerified": "2026-04-29",
+        "byAuthPath": {
+          "subscription": {
+            "class": "standard",
+            "notes": "Claude Code subscription billing; no API metering visibility."
+          },
+          "api": {
+            "class": "rate-limited",
+            "cap": { "tokens": 30000, "windowSec": 60, "dim": "input" },
+            "evidenceUrl": "https://platform.claude.com/docs/en/api/rate-limits",
+            "notes": "Anthropic Tier-1 API ITPM cap on sonnet-4-6."
+          },
+          "vertex": { "class": "standard", "notes": "Vertex AI quota per GCP project." },
+          "bedrock": { "class": "standard", "notes": "AWS Bedrock service quotas per region." }
+        }
+      },
+      "expectedLatencyMsP50": 12000
+    },
+    "low": {
+      "maxContext": 200000,
+      "rateLimitClass": "standard",
+      "rateLimit": {
+        "default": "subscription",
+        "lastVerified": "2026-04-29",
+        "byAuthPath": {
+          "subscription": { "class": "standard", "notes": "Claude Code subscription billing." },
+          "api": {
+            "class": "rate-limited",
+            "cap": { "tokens": 50000, "windowSec": 60, "dim": "input" },
+            "evidenceUrl": "https://platform.claude.com/docs/en/api/rate-limits",
+            "notes": "Anthropic Tier-1 API ITPM cap on haiku-4-5; this is the cap that triggered the v2.2 playtest 429."
+          },
+          "vertex": { "class": "standard", "notes": "Vertex AI quota per GCP project." },
+          "bedrock": { "class": "standard", "notes": "AWS Bedrock service quotas per region." }
+        }
+      },
+      "expectedLatencyMsP50": 4000
+    }
+  },
+  "mcp": {
+    "allowlist": ["sequentialthinking", "context7"],
+    "catalog": ["sequentialthinking", "context7", "repo-rag", "arxiv"]
+  },
   "requiredEnv": [],
   "defaultTimeoutMs": 300000,
   "description": "Claude Code subprocess via 'claude --print' for full-capability research (codebase navigation, web, multi-step investigation). Read-only by virtue of how the adapter invokes it; the subprocess runs without the user's edit permissions in v1."

@@ -10,6 +10,190 @@ All notable changes to AsyncThink are documented here. The format follows [Keep 
 - Set plugin and marketplace author to `mintmcqueen`.
 - GitHub default branch set to `develop` so plugin installs pull v2 code by default.
 
+## [2.3.1] — 2026-05-15
+
+Review fix-pack from PR #5 (mintmcqueen). Four blockers + four high-impact gaps + several defensive polish items, all surfaced during code review of the v2.3.0 stack before merge.
+
+### Fixed (blockers)
+- **B1** — `mcpServers` is now first-class on `TaskExecutorRequest` and forwarded by ALL four invocation paths: sync delegate (`Delegate.run`), async delegate (`Delegate.runAsync` → executor.start → runTask), sync fork (`Council.runFork` — already wired in v2.3.0), async fork (executor.start → runTask). New integration test `__tests__/integration/mcpServersPropagation.test.ts` asserts the field reaches `adapter.invoke` from every path. Previously: async paths silently dropped the value.
+- **B2** — Rate-limit pre-flight refuse math corrected (R6a-D.5):
+  - Branches on `cap.dim` (`input` divides by estimated tokens; `requests`/`messages` use the cap as item count, NOT tokens; `output` is not gated). Fixes gemini high's `{tokens:250, windowSec:86400, dim:'requests'}` which v2.3.0 wrongly computed as 0 allowance → forced 1 fork/day.
+  - Bucket window aligned with `cap.windowSec` (was named "per-minute" but spanned the full window).
+  - Files included in the token estimate (uses `approxTokensWithFiles`, same byte heuristic as `checkContextLimit`).
+  - Slot push deferred to AFTER the inflight Promise spawns so a failed step doesn't burn a phantom slot.
+  - New unit tests `__tests__/unit/rateLimitRefuse.test.ts` (6 cases) cover all four dims and two window sizes.
+- **B3** — The runtime sweeper (`delegate/sweeper.ts`) now delegates to `taskExecutor.sweepIdle()` so the in-memory `cancelling` set actually protects in-flight cancellations (R5-D.3) and the 30-minute hard ceiling (R5-D.4) fires `task.terminated{signal:'orphaned'}` (R5-D.5). v2.3.0 called `taskStore.cleanupStale()` directly with no skip set, making R5-D.3/D.4/D.5 dead on the sweep path. New integration test asserts both branches.
+- **B4** — `detectAuthPath` is now an exhaustive `switch` over `AdapterId` with a `never`-typed default that throws on unknown ids. v2.3.0 had non-`else` if-chains that silently ran the codex branch for any non-claude/non-gemini adapter — the manifest validator accepts arbitrary ids, so this was a real footgun. Test covers the throw.
+
+### Fixed (high-impact gaps)
+- **H1 + H2** — Pre-flight gates now run on SYNC paths too:
+  - `Delegate.run` (sync delegate) honors `preflight: 'auth'` and applies the R6a-D.5 rate-limit refuse, sharing the executor's `recentSpawns` and `authProbeCache` for state consistency.
+  - `Council.runFork` (sync forks) does the same.
+  - Both paths gain optional dependencies (`taskExecutor` for Delegate, `taskExecutor` + `manifests` for Council) so the gates run when wired via `app.ts` and remain inert in unit tests that build them directly.
+  - The shared logic lives on two new public methods on `LocalInProcessTaskExecutor`: `applyAuthGate(adapter, principal, model)` and `applyRateLimitGate(req)` (returns a deferred-push closure).
+  - Net effect: the v2.2 playtest 429 path (sync council forks at claude-haiku rate-limited tier) is now gated.
+- **H3** — `detectClaudeError` no longer runs on `exitCode === 0` (or non-timeout success-shaped output). v2.3.0 ran the permissive substring detector unconditionally; a legitimate response mentioning "Rate limit reached" in prose would throw away as a fake rate-limit AdapterError. Gate semantics match gemini and codex now. New regression test asserts the success path.
+- **H4** — `task.fail` audit event variant now carries `errorKind`, `errorActionable`, `errorDetails`. TaskState also persists `errorDetails`. Operators can bucket failure-shape distributions from the audit log without joining back to the task mirror.
+
+### Fixed (defensive / fidelity)
+- `LocalSubprocessExecutor.cancel(onExit)` now QUEUES the `onExit` callback when cancel arrives before spawn, then arms it on the real subprocess `close` event so `task.terminated` records actual `signal`/`exitCode` (instead of `null,null`). Includes a 5-second fallback timer for the rare case where the spawn never arrives (runTask aborts early).
+- Gemini noise signature is now a prefix-match regex (`isNoiseOnlyResponse`) tolerant of trim, wording variants (`MCP issues found` / `MCP issues detected`), and case. v2.3.0's strict exact-match would regress to silent-failure on a trivial wording change in gemini-cli.
+- Codex `preflightAuthProbe` now checks `~/.codex/auth.json` (subscription auth) in addition to `OPENAI_API_KEY`. v2.3.0 always returned `ok:true` for codex even when neither was present, breaking the "fails fast on missing auth" contract.
+
+### Schema additions
+- `TaskExecutorRequest.mcpServers?: string[]` and `TaskExecutorRequest.preflight?: 'auth' | 'none'` are now first-class.
+- `TaskState.errorDetails?: Record<string, unknown>` (additive).
+- `AuditEvent` `task.fail` variant gains `errorKind?`, `errorActionable?`, `errorDetails?` (additive).
+- `LocalInProcessTaskExecutor.applyAuthGate(...)` and `.applyRateLimitGate(...)` are now public methods.
+- `Council` constructor gains optional `gates?: CouncilGates` and `manifests?: ManifestRegistry` parameters.
+- `Delegate` constructor gains an optional `manifests?: ManifestRegistry` parameter.
+
+### Tests
+- 250 unit + integration tests passing (was 234 in v2.3.0). New files: `rateLimitRefuse.test.ts` (6), `mcpServersPropagation.test.ts` (5), `sweeperCancellingSkip.test.ts` (2). Extensions to `authPath.test.ts` (B4), `adapters.test.ts` (H3), `jsonlAuditLog.test.ts` (H4).
+- v2.3 acceptance: 24 offline + 26 live (regression check including real claude PONG).
+- v2.2 acceptance: 23/23 (version-tolerant, regression check).
+
+### Migration
+- Additive at wire format. v2.3.0 → v2.3.1 callers see no breaking changes. `TaskState`/`AuditEvent` additions are optional fields; old readers ignore. The `Delegate` and `Council` constructor extensions are optional — existing tests that build them with the v2.3.0 signature still work.
+
+## [2.3.0] — 2026-05-10
+
+Fix-pack release from real-use playtest of v2.2 (2026-04-28). Five issue clusters addressed across 21 locked rulings; all amendments to v2.2 carry deprecation windows so wire-format stays backward-compatible. The framework doc with full rulings lives at `dev/research/v2-3-R7-framework.md` (gitignored per R2-D.4).
+
+### Added — Gemini parser & spawn hardening (F3)
+- **F3-D.1** `parseGeminiJson` rejects `obj.response === <noise prefix>` before returning. Closes the v2.1.1 F2 hole where gemini-cli's `UserFeedback` subscriber pollutes the response stream.
+- **F3-D.2** Curated MCP-server allowlist on gemini spawn via `--allowed-mcp-server-names <list>`. Default: `["sequentialthinking", "context7"]`. Skills extend additively via `mcp_servers: [...]` frontmatter; callers extend via `mcpServers: [...]` arg. Skills/callers cannot REMOVE servers — keeps audit story one-way. Codex MCP allowlist is informational only in v2.3 (codex v0.125 has no flag-level surface; v2.4 will add `$CODEX_HOME` override).
+- **F3-D.3** Gemini adapter throws `AdapterError({kind:'silent-failure', …})` instead of returning empty text when the parser yields `''` AND stdout matches the noise signature. Surfaces the v2.2 playtest's failure mode as a typed failure.
+- **F3-D.4** Council classifies forks that throw AdapterError as `failed`, regardless of exitCode 0. Detector-driven; legitimate short responses pass through.
+
+### Added — Adapter pre-flight & error envelope (R-DIAG)
+- **R-DIAG-D.1** Typed `AdapterError` envelope (`server/src/core/adapterError.ts`). Eight kinds: `auth | rate-limit | context | network | binary-missing | timeout | silent-failure | unknown`. `.actionable` (one-sentence next step), `.summary` (one-line), `.raw` (preserved for debugging), `.details` (per-kind metadata). `toJSON()` strips raw for compact transport.
+- **R-DIAG-D.2** Per-adapter detector functions: `detectClaudeError` (English substring matches incl. parsed cap), `detectGeminiError` (stderr JSON parse — gemini puts errors on stderr), `detectCodexError` (NDJSON scan for `turn.failed`/`error` lines), `detectBinaryMissing` (ENOENT). Each adapter's `invoke()` calls its own detector and throws on match.
+- **R-DIAG-D.3** `list_adapters` gains optional `verify: true` arg. Default passive (env presence + binary path). With verify: cheap LOCAL probes per adapter (no paid API calls). Result fields: `authPath`, `authVerified`, `authVerifiedDetail`.
+- **R-DIAG-D.4** Optional `preflight: 'auth'` on delegate / asyncthink forks. Off by default everywhere. When set, the executor runs the auth probe BEFORE allocating a task row; throws AdapterError with no state-row created. Skills can pin via frontmatter.
+- **R-DIAG-D.5** Council fork output on failure carries `{ error: adapterError.toJSON(), raw: undefined }`. Raw stays on TaskState; council response stays bounded.
+- **R-DIAG-D.6** `ContextLimitExceededError` from v2.2 R6a-D.2 becomes a typed subclass of `AdapterError` with `kind:'context'`. Existing `instanceof` checks keep working; the class gains the unified actionable/summary/raw surface.
+
+### Changed — Tier-model amendments (R6a)
+- **R6a-D.4** Replaces `tierLimits.<tier>.rateLimitClass: RateLimitClass` with `tierLimits.<tier>.rateLimit: { byAuthPath, default, lastVerified }`. v2.3 carries both fields during a deprecation window; v2.4 drops the legacy field. *(Amends R6a-D.1.)*
+- **R6a-D.5** Pre-flight refuse over-budget forks at fork-spawn time. Skip individual over-limit forks with prominent warning; council continues. Derives `forks_allowed_per_minute = floor(cap.tokens / estTokens / (cap.windowSec / 60))`. *(Amends R6a-D.2 from advisory-only to enforcement.)*
+- **R6a-D.6** Real per-cell assignments per the < 100k-ITPM-at-Tier-1 rule:
+  - claude all 3 tiers via `api` → `rate-limited` (sonnet 30k ITPM, haiku 50k ITPM at Tier 1)
+  - claude all tiers via `subscription`/`vertex`/`bedrock` → `standard`
+  - gemini high via `ai-studio` → `rate-limited` (sparse public docs; conservative)
+  - gemini med/low via `ai-studio` → `standard` (1M ITPM range)
+  - codex all tiers across all paths → `standard` (500k+ ITPM on api; subscription path metered differently)
+- **R6a-D.7** `lastVerified` staleness check: `list_adapters` emits stderr warning naming cells whose `lastVerified` is > 90 days old. Bootstrap value `2026-04-29` for all v2.3 cells.
+
+### Added — Auth-path detection
+- `server/src/adapters/authPath.ts` exports `detectAuthPath(adapter, opts)` returning the path string the adapter would use given current env. Supported paths:
+  - **claude**: `subscription` (default), `api` (`ANTHROPIC_API_KEY`), `vertex` (`CLAUDE_CODE_USE_VERTEX=1`), `bedrock` (`CLAUDE_CODE_USE_BEDROCK=1`).
+  - **gemini**: `ai-studio` (default), `vertex` (`GOOGLE_GENAI_USE_VERTEXAI=true` + `GOOGLE_CLOUD_PROJECT`).
+  - **codex**: `subscription` (default), `api` (`OPENAI_API_KEY`), `azure` (Azure OpenAI env config).
+
+### Added — Cancellation state-machine refinement (R5)
+- **R5-D.1** Wire-level `cancelling` confirmed forbidden by MCP Tasks spec; state-flip-first preserved.
+- **R5-D.2** `LocalInProcessTaskExecutor` gains private `cancelling: Set<string>` — in-memory shadow-state for taskIds whose subprocess hasn't confirmed exit. Not persisted, not on wire.
+- **R5-D.3** `TaskStore.cleanupStale({skip})` honors the cancelling set; FsTaskStore defers deletion until subprocess close. *(Amends R-DUR-D.4 — TTL values unchanged; deletion check gains in-flight skip.)*
+- **R5-D.4** `CANCELLING_HARD_CEILING_MS = 30 * 60_000`. Sweeper force-deletes past the ceiling and emits `task.terminated` with `signal: 'orphaned'`.
+- **R5-D.5** New audit event `task.terminated` with `terminatedAt`, optional `signal`, optional `exitCode`. Reserves `signal: 'orphaned'` for v3 watchdog. Emitted exactly once per cancel, paired 1:1 with `task.cancel`.
+- **R5-D.6** `tasks_result` blocker semantics preserved: unblocks immediately on cancel.
+- **R5-D.7** Multi-tenant `waitpid` watchdog deferred to v3; documented gap in CLAUDE.md.
+
+### Added — Plugin distribution (R-DIST)
+- **R-DIST-D.1** `npm run reinstall` (in `server/`) — thin verifier script:
+  1. Assert version triple agrees (`marketplace.json`, `plugin.json`, `server/package.json`).
+  2. Warn on dirty/unpushed `origin/develop`.
+  3. Run `claude plugin marketplace update asyncthink-local` + `claude plugin install asyncthink@asyncthink-local`.
+  4. Print new bookmark (version, installPath, gitCommitSha).
+  5. Bold restart reminder. NEVER auto-commits or auto-pushes.
+- **R-DIST-D.2** `npm run cache:status` and `npm run cache:prune` companions. Status classifies cache dirs as `bookmarked` / `orphaned` / `stranded`. Prune removes non-bookmarked dirs; never touches the bookmark.
+- **R-DIST-D.3** / **R-DIST-D.4** CLAUDE.md and README.md document the canonical install/update sequence; README's "Installing & updating" section + footgun callout for `origin/develop` clone behavior.
+
+### Schema additions
+- `AdapterInvocation.mcpServers?: string[]` — additive allowlist forwarded to adapter spawn.
+- `Skill.mcpServers?: string[]` + `Skill.preflight?: 'auth' | 'none'` — parseable frontmatter fields.
+- `ResolvedSkill.mcpServers` + `ResolvedSkill.preflight` — propagated through resolver.
+- `TaskState.errorKind?: string` + `TaskState.errorActionable?: string` — persisted AdapterError details.
+- `CouncilResult.errorKind?` + `CouncilResult.errorActionable?` — surfaced through asyncthink-tool response on failure.
+- `AdapterManifest.tierLimits.<tier>.rateLimit` (new) — supplants `rateLimitClass` during the deprecation window.
+- `AdapterManifest.mcp.allowlist` + `AdapterManifest.mcp.catalog` — per-adapter MCP-server curation.
+
+### Tests
+- New `adapterError.test.ts` (16 cases) — envelope shape + per-adapter detectors.
+- New `authPath.test.ts` (12 cases) — env-permutation probe for all 3 adapters × supported paths.
+- New `v2_3.acceptance.mjs` — end-to-end through stdio; 24 offline + 26 live assertions covering all the rulings above.
+- Extensions: `skillRegistry.test.ts` (+3 mcp_servers + preflight cases), `fsTaskStore.test.ts` (+2 skip-filter + hard-ceiling cases), `jsonlAuditLog.test.ts` (+2 task.terminated cases), `taskExecutor.test.ts` (+3 cancellation + AdapterError persistence + preflight cases), `adapters.test.ts` (F3-D.3 throw assertion).
+- v2.2 acceptance test (`v2_2.acceptance.mjs`) updated to be version-tolerant (matches any v2.x).
+- Total: **234 unit + integration tests** (was 196 in v2.2) + 24 v2.3 acceptance + 26 v2.3 live acceptance. All passing.
+
+### Migration
+- v2.3.0 is **purely additive at the wire format**. No breaking tool-arg changes. Three internal amendments to v2.2 rulings (R6a-D.1, R6a-D.2, R-DUR-D.4) preserve behavior via deprecation windows / additive semantics.
+- v2.2 manifests (with `rateLimitClass`) keep working — the loader prefers the new `rateLimit.byAuthPath` field when present, falls back to `rateLimitClass` otherwise. v2.4 will drop the legacy field.
+- TaskState `errorKind`/`errorActionable` are optional new fields; old v2.2 readers ignore them.
+- AuditEvent additions (`task.terminated`) are additive; old readers ignore unknown kinds.
+- v2.1.1 F2 parser tests are intentionally rewritten in v2.3 to assert the new throw-AdapterError contract (F3-D.3) — the old "return empty" contract is gone.
+- Rollback: revert the squash commit; no data migrations. v2.2 readers handle v2.3 state files (extra fields ignored).
+
+## [2.2.0] — 2026-04-27
+
+Background jobs (MCP Tasks primitive), tier-model rework with load-bearing `tierLimits`, skill-pinning successor-substitution policy, and per-delegate credentials wire-stub for v3. Purely additive at the source level. The full ruling set lives at `dev/research/R7-framework.md`.
+
+### Added — Background Jobs (R2-D, R3-D, R-DUR-D)
+- `TaskExecutor` interface (`server/src/core/taskExecutor.ts`) — lifecycle + progress hooks. Designed as the v3 swap point.
+- `LocalInProcessTaskExecutor` (`server/src/exec/localInProcessTaskExecutor.ts`) — v2.2 in-process implementation. Spawns the adapter via Promise + `LocalSubprocessExecutor`, mirrors state into `FsTaskStore`, supports idempotency dedup, pre-flight context check, principal binding, and best-effort cancel. (R3-D.1, R3-D.2)
+- Four new MCP tools: `tasks_get`, `tasks_list`, `tasks_cancel`, `tasks_result` (`server/src/tools/tasks.tool.ts`). Surface MCP Tasks RPC verbs (SEP-1686) as user-callable tools. (R2-D.1, R4-D.1)
+- `delegate({async: true, ...})` returns `{taskId}` and runs the work in the background through the TaskExecutor. Sync path (`async: false` default) is unchanged. (R4-D)
+- `asyncthink({forks[].async: true})` spawns detached forks that survive chain-end (R-DUR-D.1). The response surfaces detached task ids in `output.detachedTasks`.
+- `asyncthink_config` gains `list_tasks` and `cancel_task` action aliases. (R4-D.2)
+- Two new slash commands: `/asyncthink:delegate-async` and `/asyncthink:tasks`. (R4-D.3)
+- `TaskState` schema extended with `detached`, `principal`, `idempotencyKey`, `taskTtlMs`, `lastUpdatedAt`, `parentChainId`, `sessionId`, `substitutedFrom`, `exitCode`. Backward-compatible: legacy v2.0 status strings (`pending|running|complete|failed`) still parse, alongside MCP spec strings (`working|input_required|completed|failed|cancelled`).
+- `FsTaskStore.findByIdempotencyKey(key, principal)` — non-terminal dedup lookup. (R-DUR-D.3)
+- `FsTaskStore.cleanupStale()` reaps tasks per category TTL (working/completed 60m, failed 10m, cancelled 5m). Caller `ttlMs` clamped to `[60s, 60m]`. (R-DUR-D.4)
+- `FsTaskStore.list()` — full task enumeration for the executor's list method.
+- `LocalSubprocessExecutor.cancel(taskId)` + `bindNextSpawn(taskId)` — caller-initiated cancel via SIGTERM (SIGKILL after 1s grace). Pre-spawn cancellation is queued and applied as soon as the subprocess exists. (R-DUR-D.5)
+- `Council.endChain` skips detached tasks; awaits non-detached via `Promise.allSettled` with the existing 180s timeout. Detached forks are queryable via `tasks_get` past chain-end. (R1-D.2)
+- Sweeper extends to also reap stale tasks (`server/src/delegate/sweeper.ts`). Same 30s rate-limit semantics as the thread sweep.
+
+### Added — Tier-model rework (R6a-D)
+- `AdapterManifest.tierLimits` schema in `server/src/core/manifests.ts`. Per-tier facts: `maxContext`, `rateLimitClass` ('standard'|'rate-limited'|'unlimited'), `expectedLatencyMsP50`. Validated on manifest load.
+- Real values shipped for claude/gemini/codex (`server/src/adapters/manifests/*.json`):
+  - claude: 200k maxContext (all tiers), standard rate-limit class.
+  - gemini: 1M maxContext (all tiers), standard rate-limit class.
+  - codex: 400k maxContext (high/med), 128k (low), standard rate-limit class.
+- Pre-flight context-size check (`tierResolver.checkContextLimit`) runs in `LocalInProcessTaskExecutor.start()` and rejects with `ContextLimitExceededError` before spawning. Heuristic: ~4 chars/token over `prompt + files` byte size.
+- Documented within-adapter ordinal framing: "intelligence is a within-adapter ordinal, not a cross-adapter SLA." Surfaces in CLAUDE.md tier section.
+
+### Added — Skill-pinning policy (R6b-D)
+- `Skill.pinsModel` and `Skill.pinIsCurrent` fields surfaced via `asyncthink_config({action:"list_skills"})`. (R6b-D.3)
+- `FsSkillRegistry` accepts an optional `manifests: ManifestRegistry` constructor argument; when supplied, `pinIsCurrent` is derived from the adapter's current `tiers` map.
+- `resolveSkill` accepts an optional context (`SkillResolutionContext`) with `manifests` and `auditLog`. When the context provides manifests, a skill that pins a raw `model:` not in the adapter's current tier map triggers R6b-D.2 successor substitution: the skill's model is rewritten to the adapter's `defaultTier` model, a stderr warning is emitted, and a `model.substitute` audit event is recorded with `from`, `to`, `tier`, and `reason: "skill-pin-stale (skill=...)"`. Caller's raw `model` override always wins (no substitution). (R6b-D.1, R6b-D.2)
+- `tierResolver.resolveModel` now returns `ResolveModelResult { model, tier, substitutedFrom?, limits? }` instead of a bare string. Adapters updated. Default behavior preserves v2.1.1 semantics — raw model overrides pass through verbatim unless `substituteStaleSkillPin: true` is opted in (currently used only via the skill resolver).
+
+### Added — Per-delegate credentials wire-stub (R-CRED-D)
+- `credentials: string` field on `delegate` args, `asyncthink` forks, and skill frontmatter. Wire-only in v2.2 (R-CRED-D.1).
+- v2.2 stub: any non-default profile is rejected with `CredentialsNotSupportedError` pointing at v3 (R-CRED-D.2). The literal `"default"` (or absent/empty) is accepted.
+- `cred.use` audit event kind reserved (R-CRED-D.4) — not emitted in v2.2.
+
+### Added — Audit log enhancements (R1-D.1)
+- New event kinds: `task.create`, `task.complete`, `task.fail`, `task.cancel`, `task.expire`, `model.substitute`. All emitted from the corresponding lifecycle points.
+- 90-day rolling window with daily rotation. On startup and once per 24h, the active log is rotated to `audit.jsonl.YYYY-MM-DD` if its oldest entry is older than a day. Archives older than 90 days are pruned.
+
+### Tests
+- New `taskExecutor.test.ts` (24 tests): lifecycle, idempotency, cancel, TTL, cross-principal rejection, cred-stub, pre-flight context check.
+- New `tasksProtocol.test.ts` (4 tests): end-to-end Tasks tool surface flow.
+- New `delegateAsync.test.ts` (4 tests): delegate({async:true}) lifecycle.
+- New `tierResolver.test.ts` (12 tests): conflict detection, successor substitution opt-in, pre-flight context check.
+- New `tasks.live.test.ts` (1 test, RUN_LIVE=1): real claude PONG via TaskExecutor.
+- Extensions: `skillRegistry.test.ts` (+5 tests), `skillResolver.test.ts` (+6 tests), `fsTaskStore.test.ts` (+7 tests), `jsonlAuditLog.test.ts` (+4 tests), `localSubprocess.test.ts` (+2 tests).
+- Total: **196 unit + integration tests passing** (was 128). All idempotent — every test sets up and tears down its own state under tmp dirs.
+
+### Migration
+- v2.2.0 is purely additive at the source level. No breaking changes to tool args, schema, or wire format. Existing v2.1.1 user state under `~/.local/share/asyncthink/` reads cleanly:
+  - On-disk task records are augmented with new fields on next update (`detached`, `principal`, `idempotencyKey`, `taskTtlMs`, `lastUpdatedAt` default to safe values for any pre-v2.2 entries).
+  - Audit log rotation kicks in on first startup if `audit.jsonl` is older than a day; the first archive is created and the active log starts fresh.
+- Rollback: `v2.2.0` ships as a single squash commit on develop. `git revert <squash>` restores v2.1.1 state. User XDG state survives rollback.
+
 ## [2.1.1] — 2026-04-26
 
 Fix-pack from real-use of v2.1.0. No new features; four bugs surfaced during real council/delegate testing, fixed in parallel with the v2.2 background-jobs research kickoff.

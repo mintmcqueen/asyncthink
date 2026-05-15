@@ -1,6 +1,6 @@
 {
   "name": "asyncthink",
-  "version": "2.1.1",
+  "version": "2.3.1",
   "description": "MCP server: sequential thinking + parallel competitor council + threaded delegation to subordinate model CLIs (read-only)",
   "license": "MIT",
   "type": "module",
@@ -14,7 +14,10 @@
     "build": "tsc && shx chmod +x dist/*.js && shx mkdir -p dist/adapters/manifests && shx cp src/adapters/manifests/*.json dist/adapters/manifests/",
     "prepare": "git config core.hooksPath .githooks && npm run build",
     "watch": "tsc --watch",
-    "test": "vitest run --coverage"
+    "test": "vitest run --coverage",
+    "reinstall": "bash scripts/reinstall.sh",
+    "cache:status": "bash scripts/cache-status.sh",
+    "cache:prune": "bash scripts/cache-prune.sh"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.24.0",

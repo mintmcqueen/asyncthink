@@ -1,14 +1,11 @@
 #!/usr/bin/env node
 /**
- * AsyncThink MCP Server — Phase 0 scaffold.
+ * AsyncThink MCP Server.
  *
- * Registers six stub tools:
+ * Registers six tools (sync) plus four task RPC tools (v2.2 async):
  *   asyncthink, delegate, delegate_close, delegate_close_all,
- *   delegate_list_threads, asyncthink_config
- *
- * Real implementations land progressively from Phase 1 onward. Until then,
- * every tool returns a v2-in-progress notice. Pin to v1.1.9 for stable
- * behavior in the meantime.
+ *   delegate_list_threads, asyncthink_config,
+ *   tasks_get, tasks_list, tasks_cancel, tasks_result
  */
 import 'dotenv/config';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -19,6 +16,7 @@ import { fileURLToPath } from 'url';
 import { registerAsyncThinkTool } from './tools/asyncthink.tool.js';
 import { registerDelegateTools } from './tools/delegate.tool.js';
 import { registerConfigTool } from './tools/config.tool.js';
+import { registerTasksTools } from './tools/tasks.tool.js';
 import { migrateV1Ledger } from './migrate.js';
 const migration = migrateV1Ledger();
 if (migration.warning)
@@ -31,6 +29,7 @@ const server = new McpServer({
 registerAsyncThinkTool(server);
 registerDelegateTools(server);
 registerConfigTool(server);
+registerTasksTools(server);
 async function runServer() {
     const transport = new StdioServerTransport();
     await server.connect(transport);

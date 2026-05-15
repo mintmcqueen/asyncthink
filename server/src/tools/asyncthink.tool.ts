@@ -12,7 +12,13 @@
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { getCouncil, getThinking, getSkillRegistry } from '../app.js';
+import {
+  getCouncil,
+  getThinking,
+  getSkillRegistry,
+  getManifestRegistry,
+  getAuditLog,
+} from '../app.js';
 import type { CouncilResult } from '../asyncthink/council.js';
 import { sweepIdleOnce } from '../delegate/sweeper.js';
 import { resolveSkill } from '../skills/resolver.js';
@@ -67,6 +73,30 @@ export function registerAsyncThinkTool(server: McpServer): void {
                 .string()
                 .optional()
                 .describe('Skill id; supplies adapter + prompt prefix from the registry.'),
+              async: z
+                .boolean()
+                .optional()
+                .describe(
+                  'v2.2 — fire-and-forget detached fork. Survives chain end; reaped by TTL sweeper. Returns immediately as a task id, queryable via tasks_get.'
+                ),
+              credentials: z
+                .string()
+                .optional()
+                .describe(
+                  "v2.2 — credential profile name. v2.2 only accepts 'default'; non-default profiles will be supported in v3."
+                ),
+              mcpServers: z
+                .array(z.string())
+                .optional()
+                .describe(
+                  'v2.3 — additive MCP-server allowlist for this fork. Merged with manifest + skill defaults; cannot remove (F3-D.2).'
+                ),
+              preflight: z
+                .enum(['auth', 'none'])
+                .optional()
+                .describe(
+                  "v2.3 — opt-in auth probe before spawning this fork. Off by default; skills can pin via frontmatter (R-DIAG-D.4)."
+                ),
             })
           )
           .optional()
@@ -109,6 +139,7 @@ export function registerAsyncThinkTool(server: McpServer): void {
 
       // 3. Spawn forks (fire-and-forget). Resolve skills first.
       const spawnErrors: { id: string; error: string }[] = [];
+      const detachedTaskIds: { forkId: string; taskId: string }[] = [];
       if (args.forks) {
         for (const f of args.forks) {
           try {
@@ -116,21 +147,65 @@ export function registerAsyncThinkTool(server: McpServer): void {
             let prompt = f.prompt;
             let intelligence = f.intelligence;
             let model = f.model;
+            let credentials = f.credentials;
+            let mcpServers = f.mcpServers;
+            let preflight = f.preflight;
             if (f.skill) {
-              const resolved = await resolveSkill(getSkillRegistry(), {
-                skill: f.skill,
-                callerPrompt: f.prompt,
-                callerAdapter: f.adapter,
-                callerIntelligence: f.intelligence,
-                callerModel: f.model,
-              });
+              const resolved = await resolveSkill(
+                getSkillRegistry(),
+                {
+                  skill: f.skill,
+                  callerPrompt: f.prompt,
+                  callerAdapter: f.adapter,
+                  callerIntelligence: f.intelligence,
+                  callerModel: f.model,
+                  callerCredentials: f.credentials,
+                },
+                { manifests: getManifestRegistry(), auditLog: getAuditLog() }
+              );
               adapter = resolved.adapter as typeof f.adapter;
               prompt = resolved.prompt;
               intelligence = resolved.intelligence;
               model = resolved.model;
+              credentials = resolved.credentials;
+              // v2.3 — extend allowlist additively; caller's preflight wins over skill's.
+              if (resolved.mcpServers && resolved.mcpServers.length > 0) {
+                mcpServers = [...new Set([...(mcpServers ?? []), ...resolved.mcpServers])];
+              }
+              preflight = f.preflight ?? resolved.preflight;
             }
             if (!adapter) {
               throw new Error(`fork "${f.id}": either adapter or skill must be supplied.`);
+            }
+            // R-CRED-D.2: any non-default profile is rejected at fork time.
+            if (credentials !== undefined && credentials !== '' && credentials !== 'default') {
+              throw new Error(
+                `fork "${f.id}": credential profile "${credentials}" is not supported in v2.2 ` +
+                  '(R-CRED-D.2). Drop the credentials argument or pass "default".'
+              );
+            }
+            // v2.2 — async forks bypass chain-end and run via TaskExecutor.
+            if (f.async) {
+              const { getTaskExecutor } = await import('../app.js');
+              const state = await getTaskExecutor().start({
+                adapter,
+                prompt,
+                files: f.files,
+                intelligence,
+                model,
+                detached: true,
+                principal: null,
+                credentials,
+                threadId: `${chainId}::${f.id}`,
+                parentChainId: chainId,
+                skill: f.skill,
+                // v2.3 — additive allowlist + opt-in preflight (F3-D.2, R-DIAG-D.4).
+                // First-class on TaskExecutorRequest as of v2.3.1 B1.
+                mcpServers,
+                preflight,
+              });
+              detachedTaskIds.push({ forkId: f.id, taskId: state.taskId });
+              continue;
             }
             await council.fork({
               id: f.id,
@@ -142,6 +217,9 @@ export function registerAsyncThinkTool(server: McpServer): void {
               skill: f.skill,
               parentThreadId: chainId,
               thoughtNumber: args.thoughtNumber,
+              // v2.3 — additive MCP allowlist + preflight propagate to council forks.
+              ...(mcpServers !== undefined && { mcpServers }),
+              ...(preflight !== undefined && { preflight }),
             });
           } catch (e) {
             spawnErrors.push({
@@ -212,6 +290,7 @@ export function registerAsyncThinkTool(server: McpServer): void {
         research: status,
         ...(researchResults.length > 0 && { researchResults }),
         ...(spawnErrors.length > 0 && { spawnErrors }),
+        ...(detachedTaskIds.length > 0 && { detachedTasks: detachedTaskIds }),
         ...(reminder && { reminder }),
       };
 

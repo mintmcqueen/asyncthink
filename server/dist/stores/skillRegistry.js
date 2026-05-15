@@ -15,6 +15,12 @@
  *
  * Anything between the first `---` and the next `---` is the frontmatter;
  * content after the closing `---` is the prompt body.
+ *
+ * v2.2:
+ *   - Parses optional `credentials: <profile>` field (R-CRED-D.1).
+ *   - Derives `pinsModel` / `pinIsCurrent` against an injected manifest
+ *     registry (R6b-D.3). When no registry is supplied, `pinIsCurrent` is
+ *     left undefined.
  */
 import { promises as fsp, existsSync, readdirSync, statSync } from 'fs';
 import { join, basename, dirname } from 'path';
@@ -24,9 +30,11 @@ export class FsSkillRegistry {
     cache = null;
     pluginSkillsDir;
     userSkillsDir;
+    manifests;
     constructor(opts = {}) {
         this.pluginSkillsDir = opts.pluginSkillsDir ?? defaultPluginSkillsDir();
         this.userSkillsDir = opts.userSkillsDir ?? defaultUserSkillsDir();
+        this.manifests = opts.manifests;
     }
     async list() {
         if (!this.cache)
@@ -51,6 +59,23 @@ export class FsSkillRegistry {
         // User skills second; overrides plugin.
         for (const skill of await scanFlatStyle(this.userSkillsDir, 'user')) {
             cache.set(skill.name, skill);
+        }
+        // Pin-currency derivation (R6b-D.3): only meaningful when manifests are
+        // available.
+        if (this.manifests) {
+            for (const skill of cache.values()) {
+                if (!skill.pinsModel)
+                    continue;
+                try {
+                    const m = await this.manifests.get(skill.adapter);
+                    if (!m)
+                        continue;
+                    skill.pinIsCurrent = Object.values(m.tiers).includes(skill.pinsModel);
+                }
+                catch {
+                    // leave pinIsCurrent undefined on failure
+                }
+            }
         }
         this.cache = cache;
     }
@@ -124,17 +149,51 @@ async function loadSkillFile(path, name, source) {
     const intelligence = typeof fm.intelligence === 'string' && VALID_TIERS.has(fm.intelligence)
         ? fm.intelligence
         : undefined;
+    const model = typeof fm.model === 'string' ? fm.model : undefined;
+    const mcpServers = parseStringList(fm.mcp_servers);
+    const preflight = fm.preflight === 'auth' || fm.preflight === 'none' ? fm.preflight : undefined;
     return {
         name,
         adapter: fm.adapter,
         intelligence,
-        model: typeof fm.model === 'string' ? fm.model : undefined,
+        model,
         filesGlob: typeof fm.files_glob === 'string' ? fm.files_glob : undefined,
         timeoutMs: typeof fm.timeout_ms === 'number' ? fm.timeout_ms : undefined,
         description: fm.description,
         promptBody: parsed.body.trim(),
         source,
+        credentials: typeof fm.credentials === 'string' ? fm.credentials : undefined,
+        pinsModel: model ?? null,
+        mcpServers,
+        preflight,
     };
+}
+/**
+ * Parse a YAML-style inline list field:
+ *   mcp_servers: [foo, bar, "baz"]
+ *
+ * Returns undefined if the field is absent. Returns [] if explicitly empty.
+ * The parseScalar path stores the raw string body verbatim (e.g.
+ * "[foo, bar]"); this helper extracts the bracketed comma-separated tokens.
+ */
+function parseStringList(value) {
+    if (value === undefined)
+        return undefined;
+    if (Array.isArray(value)) {
+        return value.filter((x) => typeof x === 'string');
+    }
+    if (typeof value !== 'string')
+        return undefined;
+    const s = value.trim();
+    if (!s.startsWith('[') || !s.endsWith(']'))
+        return undefined;
+    const inner = s.slice(1, -1).trim();
+    if (!inner)
+        return [];
+    return inner
+        .split(',')
+        .map((tok) => tok.trim().replace(/^['"]|['"]$/g, ''))
+        .filter((tok) => tok.length > 0);
 }
 export function parseFrontmatter(raw) {
     const lines = raw.split(/\r?\n/);

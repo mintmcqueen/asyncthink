@@ -35,6 +35,7 @@ import { randomUUID } from 'crypto';
 import { promises as fs } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import { detectCodexError } from '../../core/adapterError.js';
 import { resolveModel } from '../tierResolver.js';
 const CODEX_TIERS = {
     high: 'gpt-5.5',
@@ -60,8 +61,8 @@ export class CodexAdapter {
         if (inv.sessionId) {
             argv.push('resume', inv.sessionId);
         }
-        const model = resolveModel(inv, this.tiers, this.defaultTier);
-        argv.push('--sandbox', 'read-only', '--json', '--skip-git-repo-check', '--color', 'never', '--output-last-message', tmp, '--model', model, '--cd', inv.cwd ?? process.cwd(), prompt);
+        const resolved = resolveModel(inv, this.tiers, this.defaultTier, { adapterId: this.id });
+        argv.push('--sandbox', 'read-only', '--json', '--skip-git-repo-check', '--color', 'never', '--output-last-message', tmp, '--model', resolved.model, '--cd', inv.cwd ?? process.cwd(), prompt);
         const result = await exec.run({
             bin: 'codex',
             argv,
@@ -69,6 +70,19 @@ export class CodexAdapter {
             env: { ...process.env, ...(inv.env ?? {}) },
             timeoutMs: inv.timeoutMs ?? this.defaultTimeoutMs,
         });
+        // v2.3 (R-DIAG-D.2): on non-zero exit, run the codex detector for known
+        // failure shapes (401, 429, network). Throw the typed envelope; the
+        // executor's runTask persists kind + actionable into TaskState.
+        if (result.exitCode !== 0) {
+            const err = detectCodexError({
+                stdout: result.stdout,
+                stderr: result.stderr,
+                exitCode: result.exitCode,
+                durationMs: result.durationMs,
+            }, resolved.model);
+            if (err)
+                throw err;
+        }
         let text = '';
         try {
             text = await fs.readFile(tmp, 'utf8');

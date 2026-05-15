@@ -6,10 +6,17 @@
  *
  * v3 swap point: this is where DI substitutes RemoteCompanionExecutor and
  * Firestore-backed stores when the cloud server is built.
+ *
+ * v2.2 additions:
+ *   - `taskExecutor` singleton (LocalInProcessTaskExecutor) for delegate-
+ *     async + delegate forks (Phase 4 unifies Council to use this).
+ *   - `manifestRegistry` is now passed into FsSkillRegistry so pinIsCurrent
+ *     derivation works (R6b-D.3).
  */
 import { AdapterRegistry } from './adapters/index.js';
 import { FsManifestRegistry } from './adapters/registry.js';
 import { LocalSubprocessExecutor } from './exec/localSubprocess.js';
+import { LocalInProcessTaskExecutor } from './exec/localInProcessTaskExecutor.js';
 import { JsonlThreadStore } from './stores/jsonlThreadStore.js';
 import { FsTaskStore } from './stores/fsTaskStore.js';
 import { FsSkillRegistry } from './stores/skillRegistry.js';
@@ -27,6 +34,7 @@ export declare function getThinking(): AsyncThinkingServer;
 export declare function getSkillRegistry(): FsSkillRegistry;
 export declare function getAuditLog(): JsonlAuditLog;
 export declare function getManifestRegistry(): FsManifestRegistry;
+export declare function getTaskExecutor(): LocalInProcessTaskExecutor;
 /**
  * Cross-registry validation: surface skill ↔ adapter conflicts as stderr
  * warnings so operators see misconfigured skills before any caller hits

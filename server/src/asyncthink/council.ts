@@ -15,11 +15,32 @@
 
 import { randomUUID } from 'crypto';
 import type { Adapter } from '../core/adapter.js';
+import { AdapterError } from '../core/adapterError.js';
 import type { AuditLog } from '../core/auditLog.js';
 import type { Executor } from '../core/executor.js';
-import type { IntelligenceTier } from '../core/manifests.js';
+import type { IntelligenceTier, ManifestRegistry } from '../core/manifests.js';
 import type { TaskState, TaskStatus, TaskStore } from '../core/taskStore.js';
 import type { ThreadStore } from '../core/threadStore.js';
+import { resolveModel } from '../adapters/tierResolver.js';
+
+/**
+ * v2.3.1 (H1+H2): Council gates injected from the executor singleton so sync
+ * forks honor the same rate-limit + auth pre-flight contract that async forks
+ * already use. Provided via constructor as an optional dependency so existing
+ * tests that don't pass the executor still work.
+ */
+export interface CouncilGates {
+  applyAuthGate(adapter: string, principal: string | null, resolvedModel?: string): void;
+  applyRateLimitGate(args: {
+    adapter: string;
+    prompt: string;
+    files?: string[];
+    principal: string | null;
+    resolvedModel?: string;
+    resolvedTier: string;
+    rateLimit: NonNullable<NonNullable<import('../core/manifests.js').TierLimits>['rateLimit']>;
+  }): Promise<(() => void) | undefined>;
+}
 
 export interface AdapterLookup {
   get(id: string): Adapter | undefined;
@@ -39,6 +60,13 @@ export interface ForkRequest {
   parentThreadId: string;
   /** Thought number that spawned this fork. */
   thoughtNumber: number;
+  /** v2.3 — additive MCP-server allowlist (F3-D.2). */
+  mcpServers?: string[];
+  /**
+   * v2.3 — auth pre-flight opt-in (R-DIAG-D.4). v2.3.1 (H2) wires this
+   * through the sync council path via the optional Council gates.
+   */
+  preflight?: 'auth' | 'none';
 }
 
 export interface ChainStatus {
@@ -54,6 +82,10 @@ export interface CouncilResult {
   status: TaskStatus;
   error?: string;
   durationMs?: number;
+  /** v2.3 — typed kind from AdapterError when fork failed (R-DIAG-D.1). */
+  errorKind?: string;
+  /** v2.3 — actionable next step from AdapterError when fork failed. */
+  errorActionable?: string;
 }
 
 export class Council {
@@ -64,7 +96,14 @@ export class Council {
     private readonly threadStore: ThreadStore,
     private readonly taskStore: TaskStore,
     private readonly executor: Executor,
-    private readonly auditLog?: AuditLog
+    private readonly auditLog?: AuditLog,
+    /**
+     * v2.3.1 (H1+H2): optional pre-flight gates. When wired (via app.ts),
+     * sync forks honor `preflight: 'auth'` and the R6a-D.5 rate-limit refuse.
+     * Tests that build Council directly without gates keep working.
+     */
+    private readonly gates?: CouncilGates,
+    private readonly manifests?: ManifestRegistry
   ) {}
 
   newChain(): string {
@@ -103,6 +142,37 @@ export class Council {
     req: ForkRequest
   ): Promise<void> {
     try {
+      // v2.3.1 (H1+H2): apply the pre-flight gates if the executor was wired
+      // through. Auth gate runs when req.preflight==='auth'. Rate-limit gate
+      // runs unconditionally for rate-limited tier cells; throws AdapterError
+      // when over budget so the catch below classifies it as a typed failure.
+      let rateLimitSlotPush: (() => void) | undefined;
+      if (this.gates) {
+        if (req.preflight === 'auth') {
+          this.gates.applyAuthGate(req.adapter, null /* v2.2 single-tenant */, req.model);
+        }
+        const manifest = this.manifests ? await this.manifests.get(req.adapter) : undefined;
+        if (manifest) {
+          const resolved = resolveModel(
+            { prompt: req.prompt, intelligence: req.intelligence, model: req.model, files: req.files },
+            manifest.tiers,
+            manifest.defaultTier,
+            { adapterId: req.adapter, tierLimits: manifest.tierLimits }
+          );
+          if (resolved.limits?.rateLimit) {
+            rateLimitSlotPush = await this.gates.applyRateLimitGate({
+              adapter: req.adapter,
+              prompt: req.prompt,
+              files: req.files,
+              principal: null,
+              resolvedModel: resolved.model,
+              resolvedTier: resolved.tier,
+              rateLimit: resolved.limits.rateLimit,
+            });
+          }
+        }
+      }
+
       await this.threadStore.open(childThreadId, adapter.id);
       await this.auditLog?.record({
         kind: 'thread.open',
@@ -121,9 +191,13 @@ export class Council {
           files: req.files,
           intelligence: req.intelligence,
           model: req.model,
+          // v2.3 (F3-D.2) — additive MCP-server allowlist passes through.
+          mcpServers: req.mcpServers,
         },
         this.executor
       );
+      // v2.3.1 (B2): consume the rate-limit slot only after invoke succeeds.
+      if (rateLimitSlotPush) rateLimitSlotPush();
       await this.threadStore.append(childThreadId, {
         ts: new Date().toISOString(),
         role: 'assistant',
@@ -146,10 +220,21 @@ export class Council {
         error: result.exitCode !== 0 ? `exit code ${result.exitCode}` : undefined,
       });
     } catch (err) {
+      // v2.3 (F3-D.4 / R-DIAG-D.1): treat AdapterError-throwing adapters as
+      // typed failures. Persist kind + actionable into TaskState for the
+      // council aggregation surface.
       const message = err instanceof Error ? err.message : String(err);
+      let errorKind: string | undefined;
+      let errorActionable: string | undefined;
+      if (err instanceof AdapterError) {
+        errorKind = err.kind;
+        errorActionable = err.actionable;
+      }
       await this.taskStore.update(taskId, {
         status: 'failed',
         error: message,
+        errorKind,
+        errorActionable,
       });
       await this.auditLog?.record({
         kind: 'invoke',
@@ -200,12 +285,26 @@ export class Council {
     return { pending, complete, failed };
   }
 
-  /** Wait for all pending forks in the chain, close child threads, prune tasks. */
+  /**
+   * Wait for non-detached forks in the chain, close their child threads,
+   * prune their tasks. Detached forks (R-DUR-D.1) are immune: they survive
+   * past chain end and are reaped by the TTL sweeper.
+   */
   async endChain(parentThreadId: string, timeoutMs: number): Promise<CouncilResult[]> {
     const prefix = `${parentThreadId}::`;
+    // Collect detached task ids so we exclude them from chain-end work.
+    const detachedIds = new Set<string>();
+    if (this.taskStore.list) {
+      for (const t of await this.taskStore.list()) {
+        if (t.id.startsWith(prefix) && t.detached === true) {
+          detachedIds.add(t.id);
+        }
+      }
+    }
+
     const promises: Promise<void>[] = [];
     for (const [tid, p] of this.inflight) {
-      if (tid.startsWith(prefix)) promises.push(p);
+      if (tid.startsWith(prefix) && !detachedIds.has(tid)) promises.push(p);
     }
     if (promises.length > 0) {
       await Promise.race([
@@ -215,25 +314,33 @@ export class Council {
     }
 
     const results: CouncilResult[] = [];
-    for (const status of ['complete', 'failed', 'running', 'pending'] as const) {
+    for (const status of [
+      'complete',
+      'completed',
+      'failed',
+      'running',
+      'working',
+      'pending',
+    ] as const) {
       for (const t of await this.taskStore.byStatus(status)) {
         if (!t.id.startsWith(prefix)) continue;
+        if (detachedIds.has(t.id)) continue;
         const forkId = t.id.slice(prefix.length);
         const r = resultFromTask(t, forkId, parentThreadId);
         if (r) results.push(r);
       }
     }
 
-    // Close child threads.
+    // Close child threads (non-detached only).
     for (const t of await this.threadStore.list()) {
-      if (t.threadId.startsWith(prefix)) {
-        await this.threadStore.close(t.threadId);
-        await this.auditLog?.record({
-          kind: 'thread.close',
-          threadId: t.threadId,
-          adapter: t.adapter,
-        });
-      }
+      if (!t.threadId.startsWith(prefix)) continue;
+      if (detachedIds.has(t.threadId)) continue;
+      await this.threadStore.close(t.threadId);
+      await this.auditLog?.record({
+        kind: 'thread.close',
+        threadId: t.threadId,
+        adapter: t.adapter,
+      });
     }
     // Prune tasks from the store.
     for (const r of results) {
@@ -259,5 +366,7 @@ function resultFromTask(
     status: state.status,
     error: state.error,
     durationMs: state.durationMs,
+    errorKind: state.errorKind,
+    errorActionable: state.errorActionable,
   };
 }

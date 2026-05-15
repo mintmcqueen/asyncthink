@@ -35,6 +35,12 @@ export interface AdapterInvocation {
   cwd?: string;
   /** Extra environment variables to set on the subprocess. */
   env?: Record<string, string>;
+  /**
+   * v2.3 — additive MCP-server allowlist for adapter spawn (F3-D.2). The
+   * adapter merges this with `manifest.mcp.allowlist` and any skill-supplied
+   * list, then passes the resolved union to the CLI via its per-CLI flag.
+   */
+  mcpServers?: string[];
 }
 
 export interface AdapterResult {

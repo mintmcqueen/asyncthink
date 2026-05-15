@@ -105,4 +105,40 @@ describe('LocalSubprocessExecutor', () => {
       })
     ).rejects.toThrow();
   });
+
+  // v2.2 — caller-initiated cancel (R-DUR-D.5)
+  it('cancel(taskId) signals the subprocess group via SIGTERM', async () => {
+    const e = new LocalSubprocessExecutor();
+    const taskId = 'tsk-cancel-1';
+    const start = Date.now();
+    const run = e.bindNextSpawn(taskId);
+    const promise = run({
+      bin: 'sh',
+      argv: ['-c', 'sleep 30'],
+      cwd: process.cwd(),
+      env: { PATH: process.env.PATH ?? '' },
+      timeoutMs: 60_000,
+    });
+    setTimeout(() => e.cancel(taskId), 50);
+    const r = await promise;
+    expect(Date.now() - start).toBeLessThan(5_000);
+    expect(r.exitCode).not.toBe(0);
+  });
+
+  it('cancel records the request even if no subprocess is yet running, applied on next spawn', async () => {
+    const e = new LocalSubprocessExecutor();
+    const taskId = 'tsk-prequeue';
+    e.cancel(taskId);
+    const start = Date.now();
+    const run = e.bindNextSpawn(taskId);
+    const r = await run({
+      bin: 'sh',
+      argv: ['-c', 'sleep 30'],
+      cwd: process.cwd(),
+      env: { PATH: process.env.PATH ?? '' },
+      timeoutMs: 60_000,
+    });
+    expect(Date.now() - start).toBeLessThan(5_000);
+    expect(r.exitCode).not.toBe(0);
+  });
 });
