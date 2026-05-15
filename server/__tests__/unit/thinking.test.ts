@@ -101,4 +101,44 @@ describe('AsyncThinkingServer.processThought', () => {
     errorSpy.mockRestore();
     if (original !== undefined) process.env.DISABLE_THOUGHT_LOGGING = original;
   });
+
+  // v2.4.0 — chalk replaced with inline ANSI. Lock in the escape sequences
+  // so a regression to a different color (or a stray dependency on the chalk
+  // package's TTY-detection behavior) is caught at test time.
+  describe('v2.4 — inline ANSI escapes', () => {
+    const collectStderr = (input: ThoughtInput): string => {
+      const original = process.env.DISABLE_THOUGHT_LOGGING;
+      delete process.env.DISABLE_THOUGHT_LOGGING;
+      const lines: string[] = [];
+      const errorSpy = vi
+        .spyOn(console, 'error')
+        .mockImplementation((s: unknown) => {
+          lines.push(String(s));
+        });
+      const local = new AsyncThinkingServer();
+      local.processThought(input);
+      errorSpy.mockRestore();
+      if (original !== undefined) process.env.DISABLE_THOUGHT_LOGGING = original;
+      return lines.join('\n');
+    };
+
+    it('thought prefix uses ANSI blue (\\x1b[34m)', () => {
+      const out = collectStderr(baseThought());
+      expect(out).toContain('\x1b[34m💭 Thought\x1b[0m');
+    });
+
+    it('revision prefix uses ANSI yellow (\\x1b[33m)', () => {
+      const out = collectStderr(
+        baseThought({ isRevision: true, revisesThought: 1, thoughtNumber: 2 })
+      );
+      expect(out).toContain('\x1b[33m🔄 Revision\x1b[0m');
+    });
+
+    it('branch prefix uses ANSI green (\\x1b[32m)', () => {
+      const out = collectStderr(
+        baseThought({ branchFromThought: 1, branchId: 'b1', thoughtNumber: 2 })
+      );
+      expect(out).toContain('\x1b[32m🌿 Branch\x1b[0m');
+    });
+  });
 });

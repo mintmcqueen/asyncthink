@@ -151,16 +151,20 @@ if [ -n "${INSTALL_PATH}" ] && [ -d "${INSTALL_PATH}/server" ]; then
   else
     # v2.3.2 fix: `claude plugin update` does NOT run `npm install` (unlike
     # the first-install path), so the cache dir lacks runtime deps and the
-    # MCP server fails to boot ("Cannot find package 'dotenv'…"). Populate.
+    # MCP server fails to boot. Populate.
+    # v2.4 hardening: switched from `npm install` to `npm ci` so the install
+    # resolves ONLY what `package-lock.json` pins. Defends against the
+    # post-Shai-Hulud npm threat model where a compromised minor release
+    # would otherwise auto-resolve through caret ranges in package.json.
     echo "${YELLOW}⚠ node_modules absent at ${INSTALL_PATH}/server/node_modules${NC}"
     echo "    Plugin manager's update flow doesn't run npm install. Populating runtime deps..."
-    echo "${BOLD}    cd ${INSTALL_PATH}/server && npm install --omit=dev --ignore-scripts${NC}"
-    if (cd "${INSTALL_PATH}/server" && npm install --omit=dev --ignore-scripts --silent); then
-      echo "${GREEN}✓ Runtime deps installed${NC}"
+    echo "${BOLD}    cd ${INSTALL_PATH}/server && npm ci --omit=dev --ignore-scripts${NC}"
+    if (cd "${INSTALL_PATH}/server" && npm ci --omit=dev --ignore-scripts --silent); then
+      echo "${GREEN}✓ Runtime deps installed (frozen lockfile)${NC}"
     else
-      echo "${RED}✗ npm install failed in ${INSTALL_PATH}/server${NC}" >&2
+      echo "${RED}✗ npm ci failed in ${INSTALL_PATH}/server${NC}" >&2
       echo "${RED}   You'll need to install deps manually before restarting Claude Code:${NC}" >&2
-      echo "${RED}   cd ${INSTALL_PATH}/server && npm install --omit=dev --ignore-scripts${NC}" >&2
+      echo "${RED}   cd ${INSTALL_PATH}/server && npm ci --omit=dev --ignore-scripts${NC}" >&2
       exit 1
     fi
   fi
