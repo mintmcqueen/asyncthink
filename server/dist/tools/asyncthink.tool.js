@@ -72,6 +72,14 @@ export function registerAsyncThinkTool(server) {
                     .enum(['auth', 'none'])
                     .optional()
                     .describe("v2.3 — opt-in auth probe before spawning this fork. Off by default; skills can pin via frontmatter (R-DIAG-D.4)."),
+                authPath: z
+                    .string()
+                    .optional()
+                    .describe("v2.3.3 — auth-path override for the rate-limit gate on this fork. Use when env-derived path misclassifies the real auth route."),
+                bypassRateLimit: z
+                    .boolean()
+                    .optional()
+                    .describe("v2.3.3 — opt out of pre-flight rate-limit refuse for this fork. Caller assumes 429 risk."),
             }))
                 .optional()
                 .describe('Forks to spawn during this thought.'),
@@ -121,6 +129,8 @@ export function registerAsyncThinkTool(server) {
                     let credentials = f.credentials;
                     let mcpServers = f.mcpServers;
                     let preflight = f.preflight;
+                    let forkAuthPath = f.authPath;
+                    let forkBypassRateLimit = f.bypassRateLimit;
                     if (f.skill) {
                         const resolved = await resolveSkill(getSkillRegistry(), {
                             skill: f.skill,
@@ -140,6 +150,9 @@ export function registerAsyncThinkTool(server) {
                             mcpServers = [...new Set([...(mcpServers ?? []), ...resolved.mcpServers])];
                         }
                         preflight = f.preflight ?? resolved.preflight;
+                        // v2.3.3 — caller authPath/bypass wins; skill provides default.
+                        forkAuthPath = f.authPath ?? resolved.authPath;
+                        forkBypassRateLimit = f.bypassRateLimit ?? resolved.bypassRateLimit;
                     }
                     if (!adapter) {
                         throw new Error(`fork "${f.id}": either adapter or skill must be supplied.`);
@@ -168,6 +181,9 @@ export function registerAsyncThinkTool(server) {
                             // First-class on TaskExecutorRequest as of v2.3.1 B1.
                             mcpServers,
                             preflight,
+                            // v2.3.3 — caller flexibility levers for async fork.
+                            authPath: forkAuthPath,
+                            bypassRateLimit: forkBypassRateLimit,
                         });
                         detachedTaskIds.push({ forkId: f.id, taskId: state.taskId });
                         continue;
@@ -185,6 +201,9 @@ export function registerAsyncThinkTool(server) {
                         // v2.3 — additive MCP allowlist + preflight propagate to council forks.
                         ...(mcpServers !== undefined && { mcpServers }),
                         ...(preflight !== undefined && { preflight }),
+                        // v2.3.3 — caller flexibility levers for sync fork.
+                        ...(forkAuthPath !== undefined && { authPath: forkAuthPath }),
+                        ...(forkBypassRateLimit !== undefined && { bypassRateLimit: forkBypassRateLimit }),
                     });
                 }
                 catch (e) {

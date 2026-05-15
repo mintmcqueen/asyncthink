@@ -41,6 +41,22 @@ export interface AdapterInvocation {
    * list, then passes the resolved union to the CLI via its per-CLI flag.
    */
   mcpServers?: string[];
+  /**
+   * v2.3.3 — auth-path override for the rate-limit gate (R6a-D.4 extension).
+   * Forces `applyRateLimitGate` to use the advisory at THIS path instead of
+   * env-derived `detectAuthPath()`. Does NOT change the adapter's actual
+   * argv/env — the CLI still decides its own auth. Use when you know the
+   * real auth path differs from the env signals (e.g. claude-cli using
+   * subscription auth despite ANTHROPIC_API_KEY being set in env).
+   */
+  authPath?: string;
+  /**
+   * v2.3.3 — opt-out of the pre-flight rate-limit refuse (R6a-D.5 escape
+   * hatch). When true, the gate logs an audit event and lets the call
+   * through unchecked. Caller assumes the 429 risk. Use when the caller has
+   * better context than the conservative pre-flight estimate.
+   */
+  bypassRateLimit?: boolean;
 }
 
 export interface AdapterResult {

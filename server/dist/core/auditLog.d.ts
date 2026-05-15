@@ -73,6 +73,12 @@ export type AuditEvent = {
     signal?: NodeJS.Signals | 'orphaned';
     /** Exit code reported by ChildProcess.on('close'), if any. */
     exitCode?: number;
+} | {
+    kind: 'task.bypass_rate_limit';
+    taskId: string;
+    adapter: string;
+    authPath?: string;
+    reason?: string;
 };
 export interface AuditLog {
     /** Record an event. Should never throw to the caller; log internally on failure. */

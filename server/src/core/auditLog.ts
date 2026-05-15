@@ -85,6 +85,15 @@ export type AuditEvent =
       signal?: NodeJS.Signals | 'orphaned';
       /** Exit code reported by ChildProcess.on('close'), if any. */
       exitCode?: number;
+    }
+  // v2.3.3 — bypass event for observability when caller opts out of the
+  // rate-limit gate. Pairs with task.create when bypassRateLimit:true.
+  | {
+      kind: 'task.bypass_rate_limit';
+      taskId: string;
+      adapter: string;
+      authPath?: string;
+      reason?: string;
     };
 
 export interface AuditLog {

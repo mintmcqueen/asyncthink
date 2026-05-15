@@ -127,6 +127,18 @@ export function registerDelegateTools(server: McpServer): void {
           .describe(
             "v2.3 — opt-in auth pre-flight (R-DIAG-D.4). When 'auth', runs a local probe before spawning; fails fast on missing/invalid auth."
           ),
+        authPath: z
+          .string()
+          .optional()
+          .describe(
+            "v2.3.3 — auth-path override for the rate-limit gate (e.g. 'subscription' when ANTHROPIC_API_KEY is set but the CLI uses subscription auth). Does NOT change actual adapter routing; only the advisory lookup."
+          ),
+        bypassRateLimit: z
+          .boolean()
+          .optional()
+          .describe(
+            "v2.3.3 — opt out of pre-flight rate-limit refuse. Caller assumes 429 risk; an audit event records the bypass."
+          ),
       },
     },
     async (args) => {
@@ -140,6 +152,8 @@ export function registerDelegateTools(server: McpServer): void {
       let credentials = args.credentials;
       let mcpServers = args.mcpServers;
       let preflight = args.preflight;
+      let authPath = args.authPath;
+      let bypassRateLimit = args.bypassRateLimit;
       if (args.skill) {
         const resolved = await resolveSkill(
           getSkillRegistry(),
@@ -166,6 +180,9 @@ export function registerDelegateTools(server: McpServer): void {
           mcpServers = [...new Set([...(mcpServers ?? []), ...resolved.mcpServers])];
         }
         preflight = args.preflight ?? resolved.preflight;
+        // v2.3.3 — caller authPath/bypassRateLimit wins; skill provides default.
+        authPath = args.authPath ?? resolved.authPath;
+        bypassRateLimit = args.bypassRateLimit ?? resolved.bypassRateLimit;
       }
       if (!adapter) {
         throw new Error('delegate: either `adapter` or `skill` must be supplied.');
@@ -188,6 +205,8 @@ export function registerDelegateTools(server: McpServer): void {
             credentials,
             mcpServers,
             preflight,
+            authPath,
+            bypassRateLimit,
           });
           return {
             content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
@@ -207,6 +226,8 @@ export function registerDelegateTools(server: McpServer): void {
           model,
           credentials,
           mcpServers,
+          authPath,
+          bypassRateLimit,
         });
         return {
           content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],

@@ -1,6 +1,6 @@
 # AsyncThink MCP Server — Developer Documentation
 
-> **Status:** v2.3.2 released. Reinstall-script fixes: `npm run reinstall` now (1) detects `claude plugin install`'s "already installed" no-op and falls back to `claude plugin update`, and (2) populates `node_modules/` post-update via `npm install --omit=dev --ignore-scripts` (the plugin manager's update path doesn't run npm install, which left the cache install dir missing runtime deps and the MCP server unable to boot). v2.3.1 review fix-pack from PR #5: blockers B1-B4 (mcpServers propagation, rate-limit math by dim/window, sweeper integration with cancelling Set, exhaustive authPath switch) + high-impact gaps H1-H4 (sync paths now run pre-flight gates, claude detector gated on non-zero exit, audit task.fail carries typed error envelope) + cancel(onExit) ordering + gemini noise regex robustness + codex auth probe checks ~/.codex/auth.json. **The pre-flight rate-limit refuse now applies to sync council forks too** (was async-only in v2.3.0). v2.3.0 fix-pack: gemini parser hardening (F3), typed AdapterError envelope + auth pre-flight (R-DIAG), auth-path-aware rate-limit advisories (R6a amendments), curated MCP-server allowlist (F3-D.2), cancellation post-exit confirmation (R5). v2.0.0 onwards is the modular refactor; v1.1.9 git tag remains the historical pin for v1 behavior.
+> **Status:** v2.3.3 released. Flexibility fix-pack: (1) `authPath` override on `delegate`, `asyncthink` forks, skill frontmatter (`auth_path:`), and `TaskExecutorRequest` — overrides the env-derived auth path used for rate-limit advisory lookup (does NOT change actual adapter routing); (2) `bypassRateLimit: true` on the same surfaces (skill frontmatter: `bypass_rate_limit:`) — opts out of the pre-flight refuse entirely, emits a `task.bypass_rate_limit` audit event; (3) async-delegate thread close on terminal — `runTask` now closes the child thread on completed/failed/cancelled instead of leaving it for the 6h idle sweeper. v2.3.2: reinstall-script fixes (`claude plugin install` no-op detection + node_modules guard). v2.3.1: review fix-pack from PR #5 (B1-B4 + H1-H4 + defensive fidelity). v2.3.0: gemini parser hardening (F3), typed AdapterError envelope + auth pre-flight (R-DIAG), auth-path-aware rate-limit advisories (R6a amendments), curated MCP-server allowlist (F3-D.2), cancellation post-exit confirmation (R5). v2.0.0 onwards is the modular refactor; v1.1.9 git tag remains the historical pin for v1 behavior.
 
 ## Quick install / update
 
@@ -27,7 +27,7 @@ AsyncThink is an MCP server for sequential thinking with optional parallel forks
 | Tool | Purpose |
 | --- | --- |
 | `asyncthink` | Sequential thinking + parallel forks (council). Auto-closes chain on `nextThoughtNeeded:false`. v2.2: `forks[].async` for detached fire-and-forget. v2.3: `forks[].mcpServers` + `forks[].preflight`. |
-| `delegate` | Open or continue a single-subordinate thread. Inline `close: true` for one-round-trip. v2.2: `async`, `idempotencyKey`, `ttlMs`, `credentials`. v2.3: `mcpServers` (additive allowlist), `preflight: 'auth'` (opt-in local probe). |
+| `delegate` | Open or continue a single-subordinate thread. Inline `close: true` for one-round-trip. v2.2: `async`, `idempotencyKey`, `ttlMs`, `credentials`. v2.3: `mcpServers` (additive allowlist), `preflight: 'auth'` (opt-in local probe). v2.3.3: `authPath` (override advisory), `bypassRateLimit` (opt out of pre-flight refuse). |
 | `delegate_close` | Close a thread. Idempotent. |
 | `delegate_close_all` | End-of-session safety net. |
 | `delegate_list_threads` | Introspection: open threads, adapter, idle time. |
@@ -116,6 +116,8 @@ files_glob: src/**/*.ts       # optional
 model: gpt-5.5                # optional escape hatch — pin a raw model id
 timeout_ms: 240000            # optional
 credentials: default          # v2.2 — wire-stub for v3 per-delegate creds (R-CRED-D.1)
+auth_path: subscription       # v2.3.3 — override the rate-limit advisory path lookup
+bypass_rate_limit: false      # v2.3.3 — when true, skip the pre-flight refuse for this skill
 ---
 ```
 
@@ -297,6 +299,10 @@ Each adapter can reach its model provider through multiple auth paths with mater
 
 **Pre-flight refuse (R6a-D.5):** at fork-spawn, the executor computes `forks_allowed_per_minute = floor(cap.tokens / estimatedPromptTokens / (cap.windowSec / 60))`. If the council already burned that budget, the over-limit fork is skipped with a typed `kind: 'rate-limit'` AdapterError envelope and the council continues with the remaining forks. The advisory was informational in v2.2; it is enforcement in v2.3.
 
+**Caller flexibility levers (v2.3.3):**
+- `authPath: <string>` on `delegate`, `asyncthink` forks, or skill frontmatter (`auth_path:`) overrides the env-derived path used to look up `byAuthPath[...]`. Use when the env probe misclassifies the real route (e.g. `ANTHROPIC_API_KEY` set as fallback but the CLI actually uses subscription auth). Affects ONLY the advisory lookup — actual adapter spawn argv/env routing is unchanged.
+- `bypassRateLimit: true` on the same surfaces (skill frontmatter: `bypass_rate_limit:`) opts out of the pre-flight refuse entirely. Emits a `task.bypass_rate_limit` audit event with `taskId`, `adapter`, `authPath?`, `reason` so post-hoc 429s can be correlated with bypass intent. Use sparingly — the gate exists because un-gated 429s burn the entire chain rather than just the over-limit fork.
+
 **Staleness tripwire (R6a-D.7):** `list_adapters` walks every cell's `rateLimit.lastVerified` and emits a stderr warning for cells older than 90 days. Bootstrap value is `2026-04-29` for all v2.3 cells.
 
 ## Per-Delegate Credentials (v3 contract; v2.2 wire-only)
@@ -321,6 +327,7 @@ This contract lets users plan multi-tenant or per-task credential isolation with
 | `task.complete` / `task.fail` (v2.2) | `taskId, adapter, durationMs, error?` | TaskExecutor terminal transition |
 | `task.cancel` / `task.expire` (v2.2) | `taskId, adapter, reason?` | tasks_cancel / sweeper |
 | `task.terminated` (v2.3) | `taskId, adapter, terminatedAt, signal?, exitCode?` | Paired 1:1 with `task.cancel`; emitted from the subprocess `close` listener (or immediately if no subprocess existed). Reserves `signal: 'orphaned'` for v3 watchdog. |
+| `task.bypass_rate_limit` (v2.3.3) | `taskId, adapter, authPath?, reason?` | Caller passed `bypassRateLimit: true` on `delegate`/`asyncthink` fork (or skill frontmatter `bypass_rate_limit: true`). Reasons: `caller-opt-out` (async), `sync-delegate-opt-out`, `council-fork-opt-out`. |
 | `model.substitute` (v2.2) | `adapter, from, to, tier, reason` | SkillResolver R6b-D.2 substitution |
 | `cred.use` (reserved) | (deferred to v3 per R-CRED-D.4) | — |
 

@@ -49,7 +49,7 @@ import { isTerminal as isTerminalTaskStatus } from '../core/taskStore.js';
 import type { TaskState, TaskStore } from '../core/taskStore.js';
 import { LocalSubprocessExecutor } from './localSubprocess.js';
 import { checkContextLimit, resolveModel } from '../adapters/tierResolver.js';
-import { detectAuthPath, type AdapterId } from '../adapters/authPath.js';
+import { detectAuthPath, type AdapterId, type AuthPath } from '../adapters/authPath.js';
 
 export interface LocalInProcessTaskExecutorOptions {
   adapters: AdapterLookup;
@@ -193,6 +193,10 @@ export class LocalInProcessTaskExecutor implements TaskExecutor {
         resolvedModel,
         resolvedTier,
         rateLimit: resolvedLimits.rateLimit,
+        // v2.3.3: thread caller flexibility levers through.
+        authPathOverride: req.authPath,
+        bypassRateLimit: req.bypassRateLimit,
+        // taskId is allocated below; bypass audit gets it after the row exists.
       });
     }
 
@@ -222,6 +226,18 @@ export class LocalInProcessTaskExecutor implements TaskExecutor {
       principal,
       idempotencyKey: req.idempotencyKey,
     });
+
+    // v2.3.3: bypass audit event fires after the task row exists so it has a
+    // valid taskId to reference. Skipped when bypass wasn't requested.
+    if (req.bypassRateLimit) {
+      await this.recordAudit({
+        kind: 'task.bypass_rate_limit',
+        taskId,
+        adapter: req.adapter,
+        authPath: req.authPath,
+        reason: 'caller-opt-out',
+      });
+    }
 
     // 6. Spawn the inflight Promise.
     const handle: InflightHandle = {
@@ -323,6 +339,26 @@ export class LocalInProcessTaskExecutor implements TaskExecutor {
       adapter: adapterId,
       reason: 'caller',
     });
+
+    // v2.3.3: close the child thread synchronously on cancel. The childThreadId
+    // is the same as taskId for async-delegate tasks (per runTask convention).
+    // For council forks where threadId was set explicitly to chainId::forkId,
+    // we close that too. The threadStore.close is idempotent so a double-close
+    // (here + runTask's terminal branch) is harmless.
+    if (this.threadStore) {
+      const childThreadId = taskId; // matches runTask's `req.threadId ?? taskId` fallback
+      try {
+        await this.threadStore.close(childThreadId);
+        await this.recordAudit({
+          kind: 'thread.close',
+          threadId: childThreadId,
+          adapter: adapterId,
+        });
+      } catch {
+        /* not fatal */
+      }
+    }
+
     const fresh = await this.taskStore.get(taskId);
     return projectState(fresh!);
   }
@@ -447,10 +483,22 @@ export class LocalInProcessTaskExecutor implements TaskExecutor {
     resolvedModel?: string;
     resolvedTier: string;
     rateLimit: NonNullable<TierLimits['rateLimit']>;
+    /** v2.3.3: caller-supplied auth-path override (e.g., force 'subscription'). */
+    authPathOverride?: string;
+    /** v2.3.3: caller-supplied gate opt-out. When true, returns undefined without throwing. */
+    bypassRateLimit?: boolean;
+    /** v2.3.3: taskId for audit context (only used when bypassRateLimit:true). */
+    taskId?: string;
   }): Promise<(() => void) | undefined> {
-    const authPath = detectAuthPath(args.adapter as AdapterId);
+    // v2.3.3: caller opt-out. Skip the gate entirely. The bypass audit event
+    // is emitted by the caller AFTER taskId allocation (or with their own
+    // task-scoped id for Council/Delegate sync paths) — this keeps gate logic
+    // independent of taskId lifecycle.
+    if (args.bypassRateLimit) return undefined;
+    // v2.3.3: honor caller-supplied authPath override; falls back to env-derived.
+    const authPath = args.authPathOverride ?? detectAuthPath(args.adapter as AdapterId);
     const advisory =
-      args.rateLimit.byAuthPath[authPath] ??
+      args.rateLimit.byAuthPath[authPath as AuthPath] ??
       args.rateLimit.byAuthPath[args.rateLimit.default];
     if (advisory?.class !== 'rate-limited' || !advisory.cap) return undefined;
 
@@ -724,6 +772,23 @@ export class LocalInProcessTaskExecutor implements TaskExecutor {
         threadId: childThreadId,
         error: errMsg,
       });
+    }
+
+    // v2.3.3: close the child thread synchronously on terminal. Previously
+    // async-task threads leaked until the 6h idle sweeper fired. This applies
+    // to BOTH the completed-success and failed-error branches; cancelled tasks
+    // are handled in cancel() itself.
+    if (this.threadStore) {
+      try {
+        await this.threadStore.close(childThreadId);
+        await this.recordAudit({
+          kind: 'thread.close',
+          threadId: childThreadId,
+          adapter: adapter.id,
+        });
+      } catch {
+        /* thread already closed or store unavailable; not fatal */
+      }
     }
   }
 

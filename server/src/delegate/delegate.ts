@@ -84,6 +84,17 @@ export interface DelegateRequest {
    * probe BEFORE allocating a task row. Only applies in async mode.
    */
   preflight?: 'auth' | 'none';
+  /**
+   * v2.3.3 — auth-path override for the rate-limit gate. Use when the
+   * env-derived authPath misclassifies the call (e.g., subscription auth
+   * with ANTHROPIC_API_KEY set).
+   */
+  authPath?: string;
+  /**
+   * v2.3.3 — opt-out of the rate-limit refuse. Caller assumes 429 risk.
+   * Emits a `task.bypass_rate_limit` audit event for observability.
+   */
+  bypassRateLimit?: boolean;
 }
 
 export interface DelegateResponse {
@@ -212,7 +223,20 @@ export class Delegate {
               resolvedModel: resolved.model,
               resolvedTier: resolved.tier,
               rateLimit: resolved.limits.rateLimit,
+              // v2.3.3 — caller flexibility levers.
+              authPathOverride: req.authPath,
+              bypassRateLimit: req.bypassRateLimit,
             });
+            // v2.3.3: sync-delegate bypass audit (no taskId — record under threadId).
+            if (req.bypassRateLimit) {
+              await this.auditLog?.record({
+                kind: 'task.bypass_rate_limit',
+                taskId: threadId,
+                adapter: req.adapter,
+                authPath: req.authPath,
+                reason: 'sync-delegate-opt-out',
+              });
+            }
           }
         }
       }
@@ -310,6 +334,9 @@ export class Delegate {
       detached: true, // async delegates are detached by default (independent of any chain)
       principal: req.principal ?? null,
       ttlMs: req.ttlMs,
+      // v2.3.3 — caller flexibility levers.
+      authPath: req.authPath,
+      bypassRateLimit: req.bypassRateLimit,
       credentials: req.credentials,
       threadId: req.threadId,
       skill: req.skill,

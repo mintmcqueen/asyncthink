@@ -10,6 +10,34 @@ All notable changes to AsyncThink are documented here. The format follows [Keep 
 - Set plugin and marketplace author to `mintmcqueen`.
 - GitHub default branch set to `develop` so plugin installs pull v2 code by default.
 
+## [2.3.3] — 2026-05-15
+
+Flexibility fix-pack. v2.3.0's pre-flight rate-limit refuse was correct but rigid: when the env-derived auth path misclassifies a caller's real route (e.g. `ANTHROPIC_API_KEY` set but the CLI actually uses subscription auth, or vice versa), there was no per-call escape hatch — the only way to widen the gate was to mutate env vars before spawning the parent session. v2.3.3 adds two opt-in levers AND closes a thread-leak in the async-delegate path.
+
+### Added
+- **`authPath` override** on `delegate`, `asyncthink` forks, skill frontmatter (`auth_path:`), and `TaskExecutorRequest`. When set, the rate-limit gate looks up `tierLimits.<tier>.rateLimit.byAuthPath[<override>]` instead of running `detectAuthPath(env)`. Affects ONLY the advisory lookup — actual adapter spawn argv/env routing is unchanged. Use cases:
+  - Vertex / Bedrock callers whose env probe misfires.
+  - A subscription-auth user with `ANTHROPIC_API_KEY` set as a fallback (the env probe would gate them to Tier-1 ITPM; subscription has higher caps).
+  - Future per-call selection of provider route as v3 multi-tenant arrives.
+- **`bypassRateLimit: true`** on the same four surfaces (skill frontmatter: `bypass_rate_limit:`). Opts out of the pre-flight refuse entirely; the call proceeds and the caller assumes 429 risk. Emits a `task.bypass_rate_limit` audit event with `taskId`, `adapter`, `authPath?`, `reason` so operators can correlate post-hoc 429s with bypass intent.
+- New audit event `task.bypass_rate_limit` documented in CLAUDE.md (audit-log section).
+
+### Fixed
+- **Async-delegate thread leak**: `runTask` in `LocalInProcessTaskExecutor` now closes the child thread on every terminal transition (`completed` / `failed`) and also on the `cancel()` path. Previously, async delegates left their child thread open in `~/.local/share/asyncthink/threads/`; only the 6h idle sweeper would eventually close them. The sync `Delegate.run` path already closed threads on the `close: true` flag, so the gap was async-specific. New `thread.close` audit event paired 1:1 with task terminal events.
+
+### Schema additions
+- `AdapterInvocation.authPath?: string` and `AdapterInvocation.bypassRateLimit?: boolean` (core/adapter.ts).
+- `TaskExecutorRequest.authPath?: string` and `TaskExecutorRequest.bypassRateLimit?: boolean` (core/taskExecutor.ts).
+- `DelegateRequest`, `ForkRequest`, `Skill`, `ResolvedSkill` gain matching optional fields.
+- Skill frontmatter accepts `auth_path: <string>` and `bypass_rate_limit: <bool>`.
+- `auditLog.ts` adds `kind: 'task.bypass_rate_limit'` variant.
+
+### Migration
+- Fully backward compatible. Absent fields preserve v2.3.2 behavior (env-derived authPath + enforcement enabled). Skill files without the new keys are unaffected.
+
+### Why this matters (PM lens)
+- v2.2 playtest hit a 429 because claude haiku has a 50k input-tokens/minute cap on the API auth path. v2.3.0 added the pre-flight refuse so callers see a structured advisory instead of a 429. v2.3.0 also got the auth-path detection right MOST of the time — but "most" isn't "always", and the user's recovery instinct ("just don't send long prompts") meant the system was constraining their behavior to avoid a misclassification. v2.3.3 inverts that: when the gate is wrong, callers say so once per call (or once per skill) and proceed. The audit trail lets us tune `detectAuthPath` over time using real bypass patterns rather than guessing.
+
 ## [2.3.2] — 2026-05-15
 
 Reinstall-script fix-pack. Two bugs surfaced when restarting Claude Code post-v2.3.1: (a) `claude plugin install` no-ops on existing bookmark instead of refreshing; (b) `claude plugin update` (the actual refresh command) doesn't run `npm install` in the new cache dir, so the v2.3.1 MCP server failed to boot with `Cannot find package 'dotenv'`. Both fixes land in `server/scripts/reinstall.sh`.

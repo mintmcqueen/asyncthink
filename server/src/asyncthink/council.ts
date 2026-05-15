@@ -39,6 +39,10 @@ export interface CouncilGates {
     resolvedModel?: string;
     resolvedTier: string;
     rateLimit: NonNullable<NonNullable<import('../core/manifests.js').TierLimits>['rateLimit']>;
+    /** v2.3.3 — auth-path override (skips detectAuthPath). */
+    authPathOverride?: string;
+    /** v2.3.3 — opt out of the gate; returns undefined without throwing. */
+    bypassRateLimit?: boolean;
   }): Promise<(() => void) | undefined>;
 }
 
@@ -67,6 +71,10 @@ export interface ForkRequest {
    * through the sync council path via the optional Council gates.
    */
   preflight?: 'auth' | 'none';
+  /** v2.3.3 — auth-path override for the rate-limit gate. */
+  authPath?: string;
+  /** v2.3.3 — opt-out of the rate-limit refuse on this fork. */
+  bypassRateLimit?: boolean;
 }
 
 export interface ChainStatus {
@@ -168,7 +176,20 @@ export class Council {
               resolvedModel: resolved.model,
               resolvedTier: resolved.tier,
               rateLimit: resolved.limits.rateLimit,
+              // v2.3.3 — forward caller flexibility levers.
+              authPathOverride: req.authPath,
+              bypassRateLimit: req.bypassRateLimit,
             });
+            // v2.3.3: bypass audit event paired with the fork's taskId.
+            if (req.bypassRateLimit) {
+              await this.auditLog?.record({
+                kind: 'task.bypass_rate_limit',
+                taskId,
+                adapter: req.adapter,
+                authPath: req.authPath,
+                reason: 'council-fork-opt-out',
+              });
+            }
           }
         }
       }

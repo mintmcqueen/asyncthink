@@ -84,6 +84,8 @@ export async function resolveSkill(registry, input, ctx = {}) {
         substitutedFrom,
         mcpServers: skill.mcpServers,
         preflight: skill.preflight,
+        authPath: skill.authPath,
+        bypassRateLimit: skill.bypassRateLimit,
     };
 }
 function composePrompt(promptBody, callerPrompt) {

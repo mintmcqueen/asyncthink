@@ -88,7 +88,20 @@ export class Council {
                             resolvedModel: resolved.model,
                             resolvedTier: resolved.tier,
                             rateLimit: resolved.limits.rateLimit,
+                            // v2.3.3 — forward caller flexibility levers.
+                            authPathOverride: req.authPath,
+                            bypassRateLimit: req.bypassRateLimit,
                         });
+                        // v2.3.3: bypass audit event paired with the fork's taskId.
+                        if (req.bypassRateLimit) {
+                            await this.auditLog?.record({
+                                kind: 'task.bypass_rate_limit',
+                                taskId,
+                                adapter: req.adapter,
+                                authPath: req.authPath,
+                                reason: 'council-fork-opt-out',
+                            });
+                        }
                     }
                 }
             }

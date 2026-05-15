@@ -138,6 +138,10 @@ export class LocalInProcessTaskExecutor {
                 resolvedModel,
                 resolvedTier,
                 rateLimit: resolvedLimits.rateLimit,
+                // v2.3.3: thread caller flexibility levers through.
+                authPathOverride: req.authPath,
+                bypassRateLimit: req.bypassRateLimit,
+                // taskId is allocated below; bypass audit gets it after the row exists.
             });
         }
         // 5. Allocate task id and TaskState row.
@@ -165,6 +169,17 @@ export class LocalInProcessTaskExecutor {
             principal,
             idempotencyKey: req.idempotencyKey,
         });
+        // v2.3.3: bypass audit event fires after the task row exists so it has a
+        // valid taskId to reference. Skipped when bypass wasn't requested.
+        if (req.bypassRateLimit) {
+            await this.recordAudit({
+                kind: 'task.bypass_rate_limit',
+                taskId,
+                adapter: req.adapter,
+                authPath: req.authPath,
+                reason: 'caller-opt-out',
+            });
+        }
         // 6. Spawn the inflight Promise.
         const handle = {
             taskId,
@@ -262,6 +277,25 @@ export class LocalInProcessTaskExecutor {
             adapter: adapterId,
             reason: 'caller',
         });
+        // v2.3.3: close the child thread synchronously on cancel. The childThreadId
+        // is the same as taskId for async-delegate tasks (per runTask convention).
+        // For council forks where threadId was set explicitly to chainId::forkId,
+        // we close that too. The threadStore.close is idempotent so a double-close
+        // (here + runTask's terminal branch) is harmless.
+        if (this.threadStore) {
+            const childThreadId = taskId; // matches runTask's `req.threadId ?? taskId` fallback
+            try {
+                await this.threadStore.close(childThreadId);
+                await this.recordAudit({
+                    kind: 'thread.close',
+                    threadId: childThreadId,
+                    adapter: adapterId,
+                });
+            }
+            catch {
+                /* not fatal */
+            }
+        }
         const fresh = await this.taskStore.get(taskId);
         return projectState(fresh);
     }
@@ -369,7 +403,14 @@ export class LocalInProcessTaskExecutor {
      * step throws (B2 fix).
      */
     async applyRateLimitGate(args) {
-        const authPath = detectAuthPath(args.adapter);
+        // v2.3.3: caller opt-out. Skip the gate entirely. The bypass audit event
+        // is emitted by the caller AFTER taskId allocation (or with their own
+        // task-scoped id for Council/Delegate sync paths) — this keeps gate logic
+        // independent of taskId lifecycle.
+        if (args.bypassRateLimit)
+            return undefined;
+        // v2.3.3: honor caller-supplied authPath override; falls back to env-derived.
+        const authPath = args.authPathOverride ?? detectAuthPath(args.adapter);
         const advisory = args.rateLimit.byAuthPath[authPath] ??
             args.rateLimit.byAuthPath[args.rateLimit.default];
         if (advisory?.class !== 'rate-limited' || !advisory.cap)
@@ -631,6 +672,23 @@ export class LocalInProcessTaskExecutor {
                 threadId: childThreadId,
                 error: errMsg,
             });
+        }
+        // v2.3.3: close the child thread synchronously on terminal. Previously
+        // async-task threads leaked until the 6h idle sweeper fired. This applies
+        // to BOTH the completed-success and failed-error branches; cancelled tasks
+        // are handled in cancel() itself.
+        if (this.threadStore) {
+            try {
+                await this.threadStore.close(childThreadId);
+                await this.recordAudit({
+                    kind: 'thread.close',
+                    threadId: childThreadId,
+                    adapter: adapter.id,
+                });
+            }
+            catch {
+                /* thread already closed or store unavailable; not fatal */
+            }
         }
     }
     boundExecutor(taskId) {

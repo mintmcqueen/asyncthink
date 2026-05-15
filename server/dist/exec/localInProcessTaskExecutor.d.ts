@@ -115,6 +115,12 @@ export declare class LocalInProcessTaskExecutor implements TaskExecutor {
         resolvedModel?: string;
         resolvedTier: string;
         rateLimit: NonNullable<TierLimits['rateLimit']>;
+        /** v2.3.3: caller-supplied auth-path override (e.g., force 'subscription'). */
+        authPathOverride?: string;
+        /** v2.3.3: caller-supplied gate opt-out. When true, returns undefined without throwing. */
+        bypassRateLimit?: boolean;
+        /** v2.3.3: taskId for audit context (only used when bypassRateLimit:true). */
+        taskId?: string;
     }): Promise<(() => void) | undefined>;
     /**
      * v2.3 (R-DIAG-D.4): cached local auth probe. Returns `{ok}` based on cheap
