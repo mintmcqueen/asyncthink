@@ -6,7 +6,12 @@
  * subordinate adapters (see ./council.ts).
  */
 
-import chalk from 'chalk';
+const ANSI_RESET = '\x1b[0m';
+const ansi = {
+  yellow: (s: string): string => `\x1b[33m${s}${ANSI_RESET}`,
+  green: (s: string): string => `\x1b[32m${s}${ANSI_RESET}`,
+  blue: (s: string): string => `\x1b[34m${s}${ANSI_RESET}`,
+};
 
 /**
  * Input for a single thought step.
@@ -48,13 +53,13 @@ export class AsyncThinkingServer {
     let context = '';
 
     if (isRevision) {
-      prefix = chalk.yellow('🔄 Revision');
+      prefix = ansi.yellow('🔄 Revision');
       context = ` (revising thought ${revisesThought})`;
     } else if (branchFromThought) {
-      prefix = chalk.green('🌿 Branch');
+      prefix = ansi.green('🌿 Branch');
       context = ` (from thought ${branchFromThought}, ID: ${branchId})`;
     } else {
-      prefix = chalk.blue('💭 Thought');
+      prefix = ansi.blue('💭 Thought');
       context = '';
     }
 

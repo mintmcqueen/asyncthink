@@ -10,6 +10,38 @@ All notable changes to AsyncThink are documented here. The format follows [Keep 
 - Set plugin and marketplace author to `mintmcqueen`.
 - GitHub default branch set to `develop` so plugin installs pull v2 code by default.
 
+## [2.4.0] — 2026-05-15
+
+Security hardening cycle. Triggered by a full dependency review against the 2025-2026 npm supply-chain compromise registry — chalk/debug (Sept 8 2025), Shai-Hulud worm (Sept 2025), Shai-Hulud 2.0 (Nov 24 2025 — 796 packages, 20M weekly downloads), axios (March 31 2026, 100M+ weekly downloads), TanStack + Mini Shai-Hulud (May 11-12 2026 — 170+ packages, dead-man's-switch wipes home dirs), node-ipc (May 14 2026 — 10M weekly downloads). Our installed versions were already past every compromise window, but the architectural defenses needed work: no lockfile committed, caret ranges resolving freshly, `npm install` instead of `npm ci`, and a vulnerable MCP SDK transitive in `@modelcontextprotocol/sdk@1.24.3`.
+
+### Security
+- **CVE-2026-25536 (high) closed** — upgraded `@modelcontextprotocol/sdk` to `^1.26.0` (`1.29.0` installed). The advisory describes a cross-client data leak via shared `StreamableHTTPServerTransport` reuse; AsyncThink uses stdio transport so the runtime exposure was nil, but the upgrade also cascades fixes for 10 transitive CVEs (`ajv` ReDoS, `brace-expansion` hang, `fast-uri` path traversal, `minimatch` ReDoS×3, `path-to-regexp` DoS, `picomatch` ReDoS, `qs` DoS×2, plus dev-only `rollup`/`vite`/`postcss`).
+- **Lockfile committed**. `server/package-lock.json` is now tracked. Prior installs resolved caret ranges (`^x.y.z`) freshly each time; if a compromised minor release of any of our 89 runtime transitives hit npm, the next install would have picked it up automatically. The lockfile pins every transitive to an exact `resolved` URL + integrity hash.
+- **Reinstall script uses `npm ci --omit=dev --ignore-scripts`** instead of `npm install --omit=dev --ignore-scripts`. `npm ci` refuses to resolve anything outside the lockfile; combined with `--ignore-scripts` (which blocks `preinstall`/`postinstall` hooks — the primary RCE vector in Shai-Hulud and node-ipc payloads), this gives a frozen + script-disabled install path.
+- **`npm audit --omit=dev --audit-level=high` gated pre-push** via `git config git-guard.test-cmd "(cd server && npm run audit:runtime && npm test --silent)"`. Future high/critical advisories block push until acknowledged.
+
+### Removed dependencies
+- **`chalk`** (runtime, ^5.3.0) — used in 3 call sites in `src/asyncthink/thinking.ts` (`.yellow`, `.green`, `.blue`). Replaced with a 7-line inline ANSI helper. Eliminates a direct dep that was at the center of the Sept 8 2025 attack (we were on 5.6.2, one patch past the compromised 5.6.1, but every direct dep is an attack surface for the next campaign).
+- **`dotenv`** (runtime, ^17.2.3) — zero imports across `src/` and `__tests__/`. Pure dead weight; removed.
+- **`shx`** (dev, ^0.3.4) — used in 3 build-script commands (`chmod +x`, `mkdir -p`, `cp`). Replaced with direct bash equivalents in `package.json`. Project is darwin/linux only so cross-platform shimming wasn't load-bearing; eliminates `shelljs` transitive surface.
+
+### Footprint
+- **189 packages** (down from **216**). Runtime tree: 84 (down from 89); dev tree: 105 (down from 127).
+- **0 vulnerabilities** at any severity (down from **11**: 7 high + 4 moderate).
+- One direct dep added: none. Direct runtime deps now: `@modelcontextprotocol/sdk`, `zod`. Two.
+
+### Build / tooling
+- `npm run build` no longer routes through `shx`; uses bash `chmod`/`mkdir -p`/`cp` directly.
+- New `npm run audit:runtime` script: `npm audit --omit=dev --audit-level=high`. Exits non-zero on any high/critical advisory in the runtime tree (ignores dev-only finds).
+
+### Migration
+- `cd server && npm run reinstall` after pulling v2.4.0 — the reinstall script handles the version bump, the `npm install`→`npm ci` switch is internal to step 6, and the bookmark refresh picks up the smaller dep set automatically.
+- If you have local skill files using `chalk` directly: switch to your own ANSI escapes or inline `\x1b[XXm...\x1b[0m`.
+- The `--ignore-scripts` flag means packages with legitimate postinstall steps (e.g. native bindings) won't auto-build. None of our current deps need scripts; if a future dep does, vendor the build artifact or pre-run scripts in CI before publishing.
+
+### Why a minor bump, not a patch
+- Install-flow semantics change (npm install→npm ci), lockfile becomes load-bearing, three direct deps removed. Patch bumps imply no surface change; this is a surface change even though no tool contract moved.
+
 ## [2.3.3] — 2026-05-15
 
 Flexibility fix-pack. v2.3.0's pre-flight rate-limit refuse was correct but rigid: when the env-derived auth path misclassifies a caller's real route (e.g. `ANTHROPIC_API_KEY` set but the CLI actually uses subscription auth, or vice versa), there was no per-call escape hatch — the only way to widen the gate was to mutate env vars before spawning the parent session. v2.3.3 adds two opt-in levers AND closes a thread-leak in the async-delegate path.
