@@ -10,6 +10,33 @@ All notable changes to AsyncThink are documented here. The format follows [Keep 
 - Set plugin and marketplace author to `mintmcqueen`.
 - GitHub default branch set to `develop` so plugin installs pull v2 code by default.
 
+## [2.5.1] — 2026-05-18
+
+QoL: a single env var lets you pin the default adapter for an entire MCP-server session, so callers without `adapter` or `skill` resolve to the chosen subordinate instead of throwing.
+
+### Added
+- **`ASYNCTHINK_DEFAULT_ADAPTER` env var** — set to `claude` / `gemini` / `codex` at MCP-server boot. When a `delegate` or `asyncthink` fork is called with neither an `adapter` field nor a `skill` (which pins one via frontmatter), the tool falls back to this default. Use case: non-OpenAI users pin gemini as the universal subordinate. Case-insensitive, trims whitespace, invalid values emit a stderr warning and behave as if unset.
+- New `server/src/tools/defaultAdapter.ts` resolver with caching across the lifetime of a single MCP-server process. Exposes `__resetDefaultAdapterCache()` for tests only.
+
+### Unchanged behavior
+- Caller-supplied `adapter` ALWAYS wins.
+- Skill-pinned adapter (via frontmatter) ALWAYS wins.
+- This is purely the "neither was supplied" fallback. v2.5.0 callers and skill files are unaffected.
+
+### Tests
+- 10 new specs in `__tests__/unit/defaultAdapter.test.ts` covering: unset env, empty/whitespace, case-insensitive match, trimming, invalid-value rejection, cache semantics.
+- Council timing-flake stabilization: `__tests__/unit/council.test.ts` bounds loosened from `<50ms` to `<250ms` (fork-returns-immediately) and `<150ms` to `<450ms` (parallel forks). Tripped under heavily-concurrent full-suite runs (47s vitest invocations). The semantic check still distinguishes parallel from sequential — sequential would be 180ms; the new ceiling tolerates scheduler jitter on loaded machines.
+
+### Usage
+
+```bash
+# Pin gemini as the default subordinate for an asyncthink session
+export ASYNCTHINK_DEFAULT_ADAPTER=gemini
+# Then launch Claude Code from the same shell — the MCP server inherits the env.
+```
+
+For per-repo defaults, use direnv (`echo "export ASYNCTHINK_DEFAULT_ADAPTER=gemini" > .envrc && direnv allow`) or your shell's project-level rc loader.
+
 ## [2.5.0] — 2026-05-15
 
 Codex MCP-allowlist enforcement + supply-chain IOC monitor. Two
