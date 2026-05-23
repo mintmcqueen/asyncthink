@@ -24,7 +24,7 @@ import { getDelegate, getThreadStore, getSkillRegistry, getManifestRegistry, get
 import { sweepIdleOnce } from '../delegate/sweeper.js';
 import { resolveSkill } from '../skills/resolver.js';
 import { ContextLimitExceededError, CredentialsNotSupportedError, } from '../core/taskExecutor.js';
-import { getDefaultAdapter } from './defaultAdapter.js';
+import { getSettingsStore } from '../app.js';
 const DELEGATE_DESCRIPTION = `Hand a focused task to a single subordinate model CLI (claude, gemini, or codex). \
 The conversation runs as a thread you can continue across multiple calls by passing the returned threadId back in.
 
@@ -146,13 +146,15 @@ export function registerDelegateTools(server) {
             authPath = args.authPath ?? resolved.authPath;
             bypassRateLimit = args.bypassRateLimit ?? resolved.bypassRateLimit;
         }
-        // v2.5.1 — fall back to ASYNCTHINK_DEFAULT_ADAPTER when neither
-        // caller-supplied adapter nor skill (which pins one) were provided.
+        // v2.6.0 — fall back to the settings layer when neither caller-supplied
+        // adapter nor skill (which pins one) were provided. Resolution chain:
+        // caller arg > skill > project settings > user settings > built-in.
         if (!adapter) {
-            adapter = getDefaultAdapter();
+            const settings = await getSettingsStore().get();
+            adapter = settings.effective?.defaults?.adapter;
         }
         if (!adapter) {
-            throw new Error('delegate: either `adapter` or `skill` must be supplied (or set ASYNCTHINK_DEFAULT_ADAPTER).');
+            throw new Error('delegate: either `adapter` or `skill` must be supplied (or set defaults.adapter via asyncthink_config).');
         }
         try {
             if (args.async) {

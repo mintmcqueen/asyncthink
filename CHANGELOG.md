@@ -10,6 +10,71 @@ All notable changes to AsyncThink are documented here. The format follows [Keep 
 - Set plugin and marketplace author to `mintmcqueen`.
 - GitHub default branch set to `develop` so plugin installs pull v2 code by default.
 
+## [2.6.0] — 2026-05-23
+
+Settings layer + Subagent registry. Replaces v2.5.1's `ASYNCTHINK_DEFAULT_ADAPTER` env var (which was a 30-minute fix) with a durable, layered persistence model. Built atop two new core abstractions that ship in their v3-portable interfaces from day one.
+
+### Added — Settings layer
+- **`server/src/core/settings.ts`** — `SettingsStore` interface, `SettingsValues` schema, dotted-path helpers (`readPath` / `setPath` / `unsetPath`), `mergeLayers` for resolution, `validateKey` for whitelisted writes. `BUILTIN_DEFAULTS = { defaults: { adapter: 'claude', subagent: 'asyncthink-delegate' } }`.
+- **`server/src/stores/fsSettingsStore.ts`** — `FsSettingsStore` with two-format layered persistence:
+  - **User scope**: `~/.config/asyncthink/settings.toml` (TOML; mirrors codex / AWS / Cargo conventions for user config).
+  - **Project scope**: `<cwd-or-ancestor>/.claude/asyncthink.local.md` (YAML frontmatter; mirrors Claude Code's `plugin-name.local.md` pattern + AsyncThink's existing skill files).
+  - Ancestor-walk for project scope: walks up from cwd looking for `.claude/asyncthink.local.md`; stops at the first match or filesystem root.
+  - Atomic write via tmp+rename. Cache invalidates on every set/unset.
+  - Zero parser deps — hand-rolled TOML + YAML-frontmatter readers/emitters for the v2.6 schema. New keys = small additions, not third-party-dep adoption.
+- **Resolution chain** (highest precedence first): per-call arg > skill frontmatter > project settings > user settings > built-in default.
+
+### Added — Subagent registry
+- **`server/src/core/subagent.ts`** — `Subagent` schema (id, name, description, prompt, optional tools[], optional model, createdAt, lastUsedAt, isBuiltIn, schemaVersion), `SubagentRegistry` interface, `BuiltinSubagent` definition shape, `slugifyName` helper. Ships `DEFAULT_ASYNCTHINK_DELEGATE` — the read-only navigation persona bootstrapped on first server boot.
+- **`server/src/stores/fsSubagentRegistry.ts`** — JSON-per-file at `~/.local/share/asyncthink/subagents/<sanitized-id>.json`. Mirrors existing FsTaskStore / JsonlThreadStore filesystem-backed patterns (no SQLite dep, consistent with the rest of the codebase). Atomic write. `bootstrapBuiltins` is idempotent — user customizations win on second boot.
+
+### Changed — Claude adapter subscription-path subagent injection
+- **`server/src/adapters/impl/claude.ts`** — when `detectAuthPath('claude') === 'subscription'` (no `ANTHROPIC_API_KEY`, no Vertex, no Bedrock), the adapter now resolves `defaults.subagent` from the settings layer, fetches the Subagent from the registry, and passes `--agents '<inline-json>' --agent <id>` to `claude --print`. The delegate runs as a dedicated persona with a focused system prompt + narrow tool set (default: `[Read, Grep, Glob]`).
+- API / Vertex / Bedrock auth paths skip subagent injection — those routes already isolate via their own credential boundary.
+- Failure-isolated: if the configured subagent id is missing or the registry fails, spawn proceeds without subagent (no `--agents` flag, no audit event).
+- New audit event: **`claude.subagent.spawn`** — `subagentId`, `subagentName`, `authPath`, `model`. Records which persona ran each delegate spawn.
+
+### Changed — `asyncthink_config` tool surface
+Eight new actions extend the existing introspection surface:
+
+- `get_settings` — effective merged settings + per-layer breakdown (`{ effective, layers: [{source, path, exists, values}] }`).
+- `set_setting` — `{key, value, scope: 'user' | 'project'}`. Validated whitelist (`defaults.adapter`, `defaults.subagent`).
+- `unset_setting` — `{key, scope}`.
+- `subagent_list` — all subagents (built-in + user-created).
+- `subagent_get` — `{subagentId}` → full subagent or `error: 'subagent_not_found'`.
+- `subagent_create` — `{subagent: {name, description, prompt, tools?, model?}}` → returns created subagent with derived id + createdAt.
+- `subagent_update` — `{subagentId, subagent: <patch>}`. Any subset of fields can be patched.
+- `subagent_delete` — `{subagentId}` → `{deleted: bool}`.
+
+Legacy `get` / `set` / `reset` no-op stubs (`v2.2 returned "not implemented"`) are gone — the settings layer is the real implementation.
+
+### Removed — `ASYNCTHINK_DEFAULT_ADAPTER` env var
+- Deleted `server/src/tools/defaultAdapter.ts` + its 10 specs.
+- `delegate` and `asyncthink` fork tool handlers now consult `getSettingsStore().get().effective.defaults.adapter` instead of the env var. Error message updated: "either `adapter` or `skill` must be supplied (or set defaults.adapter via asyncthink_config)."
+- **Migration**: users who set the env var in their shell rc should run `asyncthink_config({action: 'set_setting', key: 'defaults.adapter', value: 'gemini'})` once, then remove the env var. The settings persist across sessions and machines (via dotfiles sync).
+
+### Schema additions
+- `AuditEvent` adds `kind: 'claude.subagent.spawn'`.
+- `AdapterRegistry.withDefaults({auditLog?, settingsStore?, subagentRegistry?})` — claude adapter receives the new singletons.
+- `app.ts` exports `getSettingsStore()`, `getSubagentRegistry()`. New `bootstrapBuiltins()` runs at server boot, populating any missing built-in subagents.
+
+### Built-in subagent
+`asyncthink-delegate` — bootstrapped on first run. Read-only navigation (Read, Grep, Glob). System prompt: focused single-task worker, no edits/exec/writes, tight responses. User can shadow it (`subagent_update`) or replace it (`subagent_create` + `set_setting defaults.subagent <new-id>`).
+
+### Tests
+- 41 new specs across `settingsStore.test.ts` (path helpers, validation, FS round-trip, ancestor walk, per-layer breakdown) and `subagentRegistry.test.ts` (CRUD, bootstrap, user-customization-wins-on-second-boot).
+- 4 new specs in `claudeAdapterSubagent.test.ts` (subscription-path injection, api-path skip, missing-subagent fallback, user-customized subagent override).
+- 1 transitive `qs` CVE closed by `npm audit fix` cascading the SDK transitive bump.
+
+### Footprint
+- Total tests: 337 (up from 302). 0 vulnerabilities post-`npm audit fix`.
+- Zero new runtime deps. Two new core abstractions (`Settings` + `Subagent`) with v3-portable interfaces.
+
+### Why a minor not patch
+- Removes a v2.5.1 env var (breaking for anyone who adopted it during the one-week window).
+- Adds two persistent storage locations (`~/.config/asyncthink/settings.toml`, `~/.local/share/asyncthink/subagents/`).
+- Changes claude adapter argv shape on subscription path (additive — argv grows, doesn't shrink).
+
 ## [2.5.1] — 2026-05-18
 
 QoL: a single env var lets you pin the default adapter for an entire MCP-server session, so callers without `adapter` or `skill` resolve to the chosen subordinate instead of throwing.

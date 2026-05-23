@@ -20,9 +20,13 @@
 import { randomUUID } from 'crypto';
 import type { Adapter, AdapterInvocation, AdapterResult } from '../../core/adapter.js';
 import { detectClaudeError } from '../../core/adapterError.js';
+import type { AuditLog } from '../../core/auditLog.js';
 import type { Executor } from '../../core/executor.js';
 import type { IntelligenceTier } from '../../core/manifests.js';
+import type { SettingsStore } from '../../core/settings.js';
+import type { Subagent, SubagentRegistry } from '../../core/subagent.js';
 import { resolveModel } from '../tierResolver.js';
+import { detectAuthPath } from '../authPath.js';
 
 // v2.1.1 note: `high` was claude-opus-4-7 but Anthropic's org-level cap of
 // 30k input tokens/minute on opus-4-7 makes it unreliable for non-trivial
@@ -43,23 +47,74 @@ export class ClaudeAdapter implements Adapter {
   private readonly defaultTimeoutMs: number;
   private readonly tiers: Record<IntelligenceTier, string>;
   private readonly defaultTier: IntelligenceTier;
+  private readonly settingsStore?: SettingsStore;
+  private readonly subagentRegistry?: SubagentRegistry;
+  private readonly auditLog?: AuditLog;
 
   constructor(
     opts: {
       defaultTimeoutMs?: number;
       tiers?: Record<IntelligenceTier, string>;
       defaultTier?: IntelligenceTier;
+      /** v2.6.0 — resolves defaults.subagent for the subscription-path spawn. */
+      settingsStore?: SettingsStore;
+      /** v2.6.0 — supplies the Subagent definition matched by settings. */
+      subagentRegistry?: SubagentRegistry;
+      /** v2.6.0 — receives claude.subagent.spawn audit events. */
+      auditLog?: AuditLog;
     } = {}
   ) {
     this.defaultTimeoutMs = opts.defaultTimeoutMs ?? 300_000;
     this.tiers = opts.tiers ?? CLAUDE_TIERS;
     this.defaultTier = opts.defaultTier ?? 'med';
+    this.settingsStore = opts.settingsStore;
+    this.subagentRegistry = opts.subagentRegistry;
+    this.auditLog = opts.auditLog;
   }
 
   async invoke(inv: AdapterInvocation, exec: Executor): Promise<AdapterResult> {
     const resolved = resolveModel(inv, this.tiers, this.defaultTier, { adapterId: this.id });
     const prompt = renderPrompt(inv);
     const argv: string[] = ['--print', '--model', resolved.model, prompt];
+
+    // v2.6.0 — on the subscription auth path, spawn `claude --print` with a
+    // dedicated AsyncThink subagent so the delegate runs as a separate
+    // persona from the user's Claude Code session (focused system prompt,
+    // narrowed tool set). On non-subscription paths (api / vertex / bedrock)
+    // the subagent injection is skipped — those routes already isolate via
+    // their own credential boundary.
+    const authPath = detectAuthPath('claude');
+    let subagent: Subagent | undefined;
+    if (authPath === 'subscription' && this.settingsStore && this.subagentRegistry) {
+      try {
+        const settings = await this.settingsStore.get();
+        const subagentId = settings.effective?.defaults?.subagent;
+        if (subagentId) {
+          subagent = await this.subagentRegistry.get(subagentId);
+        }
+      } catch {
+        // Settings/registry failures must not break a spawn; fall back to
+        // unsubagented invocation.
+      }
+      if (subagent) {
+        const agentsJson = renderAgentsJson(subagent);
+        // Prepend --agents JSON + --agent <name> BEFORE positional prompt.
+        argv.splice(0, 0, '--agents', agentsJson, '--agent', subagent.id);
+        if (this.auditLog) {
+          await this.auditLog
+            .record({
+              kind: 'claude.subagent.spawn',
+              subagentId: subagent.id,
+              subagentName: subagent.name,
+              authPath,
+              model: resolved.model,
+            })
+            .catch(() => {
+              /* failure-isolated */
+            });
+        }
+      }
+    }
 
     const result = await exec.run({
       bin: 'claude',
@@ -102,4 +157,27 @@ function renderPrompt(inv: AdapterInvocation): string {
   if (!inv.files?.length) return inv.prompt;
   const fileList = inv.files.map((p) => `- ${p}`).join('\n');
   return `Files available for review:\n${fileList}\n\n${inv.prompt}`;
+}
+
+/**
+ * v2.6.0 — serialize a Subagent to the inline JSON shape consumed by
+ * `claude --agents '<json>'`. Format per `claude --help`:
+ *
+ *   '{"<name>": {"description": "...", "prompt": "...", "tools": [...], "model": "..."}}'
+ *
+ * Fields are optional except prompt; tools and model are omitted when
+ * unset on the subagent.
+ */
+function renderAgentsJson(subagent: Subagent): string {
+  const def: Record<string, unknown> = {
+    description: subagent.description,
+    prompt: subagent.prompt,
+  };
+  if (subagent.tools && subagent.tools.length > 0) {
+    def.tools = subagent.tools;
+  }
+  if (subagent.model) {
+    def.model = subagent.model;
+  }
+  return JSON.stringify({ [subagent.id]: def });
 }

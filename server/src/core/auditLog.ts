@@ -107,6 +107,16 @@ export type AuditEvent =
       emittedServers: number;
       sourceConfigPresent: boolean;
       authLinked: boolean;
+    }
+  // v2.6.0 — emitted when the claude adapter injects a subagent on the
+  // subscription auth path. Lets operators answer "which persona ran this
+  // claude delegate spawn?" from the audit log alone.
+  | {
+      kind: 'claude.subagent.spawn';
+      subagentId: string;
+      subagentName: string;
+      authPath: string;
+      model: string;
     };
 
 export interface AuditLog {

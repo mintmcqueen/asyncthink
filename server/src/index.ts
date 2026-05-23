@@ -43,7 +43,8 @@ async function runServer(): Promise<void> {
   await server.connect(transport);
   console.error(`[AsyncThink] v${PKG_VERSION} running on stdio`);
   // Best-effort cross-registry validation; warnings only.
-  const { validateRegistries } = await import('./app.js');
+  const { validateRegistries, bootstrapBuiltins } = await import('./app.js');
+  await bootstrapBuiltins();
   await validateRegistries();
 }
 

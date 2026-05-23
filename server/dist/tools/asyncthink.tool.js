@@ -13,7 +13,7 @@ import { z } from 'zod';
 import { getCouncil, getThinking, getSkillRegistry, getManifestRegistry, getAuditLog, } from '../app.js';
 import { sweepIdleOnce } from '../delegate/sweeper.js';
 import { resolveSkill } from '../skills/resolver.js';
-import { getDefaultAdapter } from './defaultAdapter.js';
+import { getSettingsStore } from '../app.js';
 const DEFAULT_FORK_TIMEOUT_MS = 180_000;
 let activeChainId = null;
 const ASYNCTHINK_DESCRIPTION = `Sequential thinking with optional parallel forks to subordinate model CLIs (claude, gemini, codex).
@@ -155,13 +155,15 @@ export function registerAsyncThinkTool(server) {
                         forkAuthPath = f.authPath ?? resolved.authPath;
                         forkBypassRateLimit = f.bypassRateLimit ?? resolved.bypassRateLimit;
                     }
-                    // v2.5.1 — env-var default applies per-fork when neither caller
-                    // adapter nor skill was supplied.
+                    // v2.6.0 — settings-layer default applies per-fork when neither
+                    // caller adapter nor skill was supplied. Resolution chain:
+                    // caller arg > skill > project settings > user settings > built-in.
                     if (!adapter) {
-                        adapter = getDefaultAdapter();
+                        const settings = await getSettingsStore().get();
+                        adapter = settings.effective?.defaults?.adapter;
                     }
                     if (!adapter) {
-                        throw new Error(`fork "${f.id}": either adapter or skill must be supplied (or set ASYNCTHINK_DEFAULT_ADAPTER).`);
+                        throw new Error(`fork "${f.id}": either adapter or skill must be supplied (or set defaults.adapter via asyncthink_config).`);
                     }
                     // R-CRED-D.2: any non-default profile is rejected at fork time.
                     if (credentials !== undefined && credentials !== '' && credentials !== 'default') {

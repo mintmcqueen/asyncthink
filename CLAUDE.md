@@ -1,6 +1,6 @@
 # AsyncThink MCP Server — Developer Documentation
 
-> **Status:** v2.5.1 released. QoL: new `ASYNCTHINK_DEFAULT_ADAPTER` env var — set to `claude` / `gemini` / `codex` and any `delegate` or `asyncthink` fork without an explicit `adapter` (and no `skill` that pins one) falls back to it. Use case: non-OpenAI users pin gemini globally. Caller-supplied `adapter` and skill-pinned adapter still win. Also: council test timing bounds loosened (50ms→250ms, 150ms→450ms) to tolerate loaded-machine vitest concurrency. v2.5.0: Two v2.4 follow-ups: (1) **codex MCP-allowlist enforcement** (F3-D.2 close) — codex spawned with `CODEX_HOME=<slim-overlay>` per AsyncThink threadId; overlay's `config.toml` contains only the allowlisted `[mcp_servers.<name>]` tables. Default allowlist `[sequentialthinking, context7]` matches gemini; skill/caller additive merge via `mcpServers: [...]`. Hardlinks `auth.json` from real `~/.codex` so token refresh propagates. Reaped on every thread close + idle sweep. New `codex.overlay.materialize` audit event. (2) **Supply-chain IOC monitor** — `npm run audit:supply-chain` walks the lockfile against a committed JSON of 2,345 known-bad `name@version` tuples (Cobenian + Wiz, refreshed weekly via GitHub Action), plus Bun-bootstrapper filename glob, plus install-script presence audit (warning). Chained into pre-push gate. Catches Shai-Hulud / Mini Shai-Hulud / axios / node-ipc / Bitwarden / SAP compromises the moment the IOC list is refreshed, independent of `npm audit`'s GHSA lag. v2.4.0: security-hardening cycle in response to the 2025-2026 npm supply-chain wave — upgraded `@modelcontextprotocol/sdk` to ≥1.26.0 (closes CVE-2026-25536), dropped `chalk`/`dotenv`/`shx`, committed `package-lock.json`, switched `reinstall.sh` to `npm ci --omit=dev --ignore-scripts`. 189 packages, 0 vulnerabilities. v2.3.3: flexibility fix-pack — `authPath` override + `bypassRateLimit` + async-delegate thread close. v2.3.2: reinstall-script fixes. v2.3.1: PR #5 review fix-pack. v2.3.0: gemini parser hardening (F3), typed AdapterError envelope, auth pre-flight, auth-path-aware rate-limit advisories, curated MCP-server allowlist, cancellation post-exit confirmation. v2.0.0 onwards is the modular refactor; v1.1.9 git tag remains the historical pin for v1 behavior.
+> **Status:** v2.6.0 released. Settings layer + Subagent registry. (1) **Settings**: `~/.config/asyncthink/settings.toml` (TOML, user scope) + `.claude/asyncthink.local.md` (YAML frontmatter, project scope) with layered resolution chain (per-call > skill > project > user > built-in). Built-in default `defaults.adapter = "claude"`. (2) **Subagent registry**: persistent JSON files at `~/.local/share/asyncthink/subagents/<id>.json`; built-in `asyncthink-delegate` bootstrapped on first run. (3) **Claude adapter subscription-path subagent injection**: on `detectAuthPath('claude') === 'subscription'` the adapter spawns `claude --print --agents '<inline-json>' --agent <id>`, so delegate work runs as a dedicated persona separate from the parent Claude Code session. New `claude.subagent.spawn` audit event. (4) **Tool surface**: `asyncthink_config` gains eight new actions — `get_settings`, `set_setting`, `unset_setting`, `subagent_list/get/create/update/delete`. (5) **Removed**: `ASYNCTHINK_DEFAULT_ADAPTER` env var (one-week-old stop-gap); migrate via `asyncthink_config({action:"set_setting", key:"defaults.adapter", value:"gemini"})`. v2.5.0: Two v2.4 follow-ups: (1) **codex MCP-allowlist enforcement** (F3-D.2 close) — codex spawned with `CODEX_HOME=<slim-overlay>` per AsyncThink threadId; overlay's `config.toml` contains only the allowlisted `[mcp_servers.<name>]` tables. Default allowlist `[sequentialthinking, context7]` matches gemini; skill/caller additive merge via `mcpServers: [...]`. Hardlinks `auth.json` from real `~/.codex` so token refresh propagates. Reaped on every thread close + idle sweep. New `codex.overlay.materialize` audit event. (2) **Supply-chain IOC monitor** — `npm run audit:supply-chain` walks the lockfile against a committed JSON of 2,345 known-bad `name@version` tuples (Cobenian + Wiz, refreshed weekly via GitHub Action), plus Bun-bootstrapper filename glob, plus install-script presence audit (warning). Chained into pre-push gate. Catches Shai-Hulud / Mini Shai-Hulud / axios / node-ipc / Bitwarden / SAP compromises the moment the IOC list is refreshed, independent of `npm audit`'s GHSA lag. v2.4.0: security-hardening cycle in response to the 2025-2026 npm supply-chain wave — upgraded `@modelcontextprotocol/sdk` to ≥1.26.0 (closes CVE-2026-25536), dropped `chalk`/`dotenv`/`shx`, committed `package-lock.json`, switched `reinstall.sh` to `npm ci --omit=dev --ignore-scripts`. 189 packages, 0 vulnerabilities. v2.3.3: flexibility fix-pack — `authPath` override + `bypassRateLimit` + async-delegate thread close. v2.3.2: reinstall-script fixes. v2.3.1: PR #5 review fix-pack. v2.3.0: gemini parser hardening (F3), typed AdapterError envelope, auth pre-flight, auth-path-aware rate-limit advisories, curated MCP-server allowlist, cancellation post-exit confirmation. v2.0.0 onwards is the modular refactor; v1.1.9 git tag remains the historical pin for v1 behavior.
 
 ## Quick install / update
 
@@ -333,6 +333,62 @@ This contract lets users plan multi-tenant or per-task credential isolation with
 
 **Pre-push integration:** `git config git-guard.test-cmd "(cd server && npm run audit:runtime && npm run audit:supply-chain && npm test --silent)"`. The supply-chain gate runs after `npm audit` (which covers GHSA-listed CVEs) and before tests.
 
+## Settings layer (v2.6.0)
+
+Two file-backed layers + built-in defaults. Edit by hand or via `asyncthink_config({action: "set_setting", key, value, scope})`.
+
+```
+Resolution chain (highest precedence first):
+  1. Per-call arg          delegate({adapter: 'gemini'})
+  2. Skill frontmatter     (skill pins adapter)
+  3. Project settings      .claude/asyncthink.local.md in cwd/ancestors (YAML frontmatter)
+  4. User settings         ~/.config/asyncthink/settings.toml (TOML)
+  5. Built-in default      defaults.adapter = "claude", defaults.subagent = "asyncthink-delegate"
+```
+
+**Tool actions** (via `asyncthink_config`):
+- `get_settings` — returns `{effective, layers}` so you can see WHICH layer set each value.
+- `set_setting` — `{key, value, scope: 'user' | 'project'}`. Persists + invalidates cache.
+- `unset_setting` — `{key, scope}`. Reverts that scope to lower layer.
+
+**Whitelisted keys** (v2.6 initial schema):
+- `defaults.adapter` — `claude` | `gemini` | `codex`.
+- `defaults.subagent` — id of a Subagent in the registry; consumed by the claude adapter on the subscription auth path.
+
+**Example user file** (`~/.config/asyncthink/settings.toml`):
+```toml
+[defaults]
+adapter = "gemini"
+subagent = "asyncthink-delegate"
+```
+
+**Example project file** (`.claude/asyncthink.local.md`):
+```markdown
+---
+defaults:
+  adapter: "codex"
+---
+```
+
+## Subagent registry (v2.6.0)
+
+Persistent personas for the claude adapter's subscription-path spawn. Stored as JSON files at `~/.local/share/asyncthink/subagents/<sanitized-id>.json` — same filesystem-backed pattern as ThreadStore/TaskStore.
+
+**Built-in:** `asyncthink-delegate` — read-only navigation (Read, Grep, Glob), focused single-task system prompt. Bootstrapped on first server boot. User customizations win on subsequent boots (`bootstrapBuiltins` is idempotent and only creates missing built-ins).
+
+**Tool actions** (via `asyncthink_config`):
+- `subagent_list` — all subagents.
+- `subagent_get` — `{subagentId}` → full definition.
+- `subagent_create` — `{subagent: {name, description, prompt, tools?, model?}}` — id is derived from `slugifyName(name)`.
+- `subagent_update` — `{subagentId, subagent: <patch>}` — any subset.
+- `subagent_delete` — `{subagentId}`.
+
+**Spawn mechanism:** when the claude adapter detects subscription auth, it passes `--agents '<inline-json>' --agent <id>` to `claude --print`. The agent JSON shape (from `claude --help`):
+```json
+{ "<id>": { "description": "...", "prompt": "...", "tools": [...], "model": "..." } }
+```
+Other auth paths (api/vertex/bedrock) skip subagent injection — those routes isolate via their credential boundary.
+
 ## Audit log
 
 `JsonlAuditLog` (`server/src/stores/jsonlAuditLog.ts`) records every adapter invocation, thread lifecycle, task lifecycle, and model-substitution event to `~/.local/share/asyncthink/audit.jsonl`. Each line is a JSON object: `{ts, pid, event}`. Recognized `event.kind` values:
@@ -347,6 +403,7 @@ This contract lets users plan multi-tenant or per-task credential isolation with
 | `task.terminated` (v2.3) | `taskId, adapter, terminatedAt, signal?, exitCode?` | Paired 1:1 with `task.cancel`; emitted from the subprocess `close` listener (or immediately if no subprocess existed). Reserves `signal: 'orphaned'` for v3 watchdog. |
 | `task.bypass_rate_limit` (v2.3.3) | `taskId, adapter, authPath?, reason?` | Caller passed `bypassRateLimit: true` on `delegate`/`asyncthink` fork (or skill frontmatter `bypass_rate_limit: true`). Reasons: `caller-opt-out` (async), `sync-delegate-opt-out`, `council-fork-opt-out`. |
 | `codex.overlay.materialize` (v2.5.0) | `threadId, overlayPath, allowedServers[], emittedServers, sourceConfigPresent, authLinked` | Emitted on every codex spawn that uses the `$CODEX_HOME` overlay (F3-D.2). Answers "which MCP servers did this codex subprocess have access to?". |
+| `claude.subagent.spawn` (v2.6.0) | `subagentId, subagentName, authPath, model` | Emitted when the claude adapter injects a subagent via `--agents`/`--agent` on the subscription auth path. Answers "which persona ran this delegate spawn?". |
 | `model.substitute` (v2.2) | `adapter, from, to, tier, reason` | SkillResolver R6b-D.2 substitution |
 | `cred.use` (reserved) | (deferred to v3 per R-CRED-D.4) | — |
 
@@ -475,10 +532,11 @@ OPENAI_API_KEY=...      # or `codex login` for codex
 # Optional overrides:
 DISABLE_THOUGHT_LOGGING=true   # suppress formatted thought boxes on stderr
 XDG_DATA_HOME=/custom/path     # override XDG data root
+XDG_CONFIG_HOME=/custom/path   # override XDG config root (settings.toml location)
 RUN_LIVE=1                     # opt into live test suites
-ASYNCTHINK_DEFAULT_ADAPTER=gemini  # v2.5.1 — default adapter when delegate/asyncthink
-                                    # fork is called without explicit adapter+skill
 ```
+
+(`ASYNCTHINK_DEFAULT_ADAPTER` was removed in v2.6.0; use the settings layer instead.)
 
 ## Development
 

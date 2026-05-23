@@ -22,6 +22,9 @@ import { JsonlThreadStore } from './stores/jsonlThreadStore.js';
 import { FsTaskStore } from './stores/fsTaskStore.js';
 import { FsSkillRegistry } from './stores/skillRegistry.js';
 import { JsonlAuditLog } from './stores/jsonlAuditLog.js';
+import { FsSettingsStore } from './stores/fsSettingsStore.js';
+import { FsSubagentRegistry } from './stores/fsSubagentRegistry.js';
+import { DEFAULT_ASYNCTHINK_DELEGATE } from './core/subagent.js';
 import { Delegate } from './delegate/delegate.js';
 import { Council } from './asyncthink/council.js';
 import { AsyncThinkingServer } from './asyncthink/thinking.js';
@@ -32,8 +35,18 @@ const threadStore = new JsonlThreadStore();
 const taskStore = new FsTaskStore();
 const skillRegistry = new FsSkillRegistry({ manifests: manifestRegistry });
 const auditLog = new JsonlAuditLog();
+// v2.6.0 — settings + subagent registry; both consulted by tool handlers
+// and the claude adapter's subscription-path subagent injection.
+const settingsStore = new FsSettingsStore();
+const subagentRegistry = new FsSubagentRegistry();
 // v2.5.0 — pass auditLog so CodexAdapter can emit codex.overlay.materialize.
-const adapters = AdapterRegistry.withDefaults({ auditLog });
+// v2.6.0 — pass settingsStore + subagentRegistry to ClaudeAdapter for
+// subscription-path subagent injection.
+const adapters = AdapterRegistry.withDefaults({
+  auditLog,
+  settingsStore,
+  subagentRegistry,
+});
 const taskExecutor = new LocalInProcessTaskExecutor({
   adapters,
   executor,
@@ -100,11 +113,33 @@ export function getTaskExecutor(): LocalInProcessTaskExecutor {
   return taskExecutor;
 }
 
+export function getSettingsStore(): FsSettingsStore {
+  return settingsStore;
+}
+
+export function getSubagentRegistry(): FsSubagentRegistry {
+  return subagentRegistry;
+}
+
 /**
  * Cross-registry validation: surface skill ↔ adapter conflicts as stderr
  * warnings so operators see misconfigured skills before any caller hits
  * the runtime error. Best-effort; never throws.
  */
+/**
+ * v2.6.0 — bootstrap built-in subagents on first run. Idempotent: existing
+ * customizations win. Called from index.ts after singleton wiring.
+ */
+export async function bootstrapBuiltins(): Promise<void> {
+  try {
+    await subagentRegistry.bootstrapBuiltins([DEFAULT_ASYNCTHINK_DELEGATE]);
+  } catch (err) {
+    console.error(
+      `[AsyncThink] Subagent bootstrap failed (non-fatal): ${(err as Error).message}`
+    );
+  }
+}
+
 export async function validateRegistries(): Promise<void> {
   const { findSkillConflicts, formatSkillConflict } = await import(
     './skills/conflictValidator.js'

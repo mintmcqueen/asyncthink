@@ -21,6 +21,8 @@ import { JsonlThreadStore } from './stores/jsonlThreadStore.js';
 import { FsTaskStore } from './stores/fsTaskStore.js';
 import { FsSkillRegistry } from './stores/skillRegistry.js';
 import { JsonlAuditLog } from './stores/jsonlAuditLog.js';
+import { FsSettingsStore } from './stores/fsSettingsStore.js';
+import { FsSubagentRegistry } from './stores/fsSubagentRegistry.js';
 import { Delegate } from './delegate/delegate.js';
 import { Council } from './asyncthink/council.js';
 import { AsyncThinkingServer } from './asyncthink/thinking.js';
@@ -35,9 +37,16 @@ export declare function getSkillRegistry(): FsSkillRegistry;
 export declare function getAuditLog(): JsonlAuditLog;
 export declare function getManifestRegistry(): FsManifestRegistry;
 export declare function getTaskExecutor(): LocalInProcessTaskExecutor;
+export declare function getSettingsStore(): FsSettingsStore;
+export declare function getSubagentRegistry(): FsSubagentRegistry;
 /**
  * Cross-registry validation: surface skill ↔ adapter conflicts as stderr
  * warnings so operators see misconfigured skills before any caller hits
  * the runtime error. Best-effort; never throws.
  */
+/**
+ * v2.6.0 — bootstrap built-in subagents on first run. Idempotent: existing
+ * customizations win. Called from index.ts after singleton wiring.
+ */
+export declare function bootstrapBuiltins(): Promise<void>;
 export declare function validateRegistries(): Promise<void>;
