@@ -15,13 +15,16 @@
 import { z } from 'zod';
 import { existsSync } from 'fs';
 import { delimiter, join } from 'path';
-import { getManifestRegistry, getSkillRegistry, getTaskExecutor, } from '../app.js';
+import { getManifestRegistry, getSettingsStore, getSkillRegistry, getSubagentRegistry, getTaskExecutor, } from '../app.js';
 import { TaskNotFoundError } from '../core/taskExecutor.js';
 import { detectAuthPath } from '../adapters/authPath.js';
 export function registerConfigTool(server) {
     server.registerTool('asyncthink_config', {
         title: 'AsyncThink Configuration',
-        description: 'Introspect adapters, skills, and tasks. Use list_adapters to check availability of subordinate CLIs (now includes per-tier limits); list_skills to see what skill ids resolve via the registry; reload_skills after editing a user skill file; list_tasks / cancel_task for async-task introspection.',
+        description: 'Introspect and modify AsyncThink configuration: adapters, skills, tasks, settings, and subagents. ' +
+            'list_adapters / list_skills / reload_skills / list_tasks / cancel_task = introspection. ' +
+            'get_settings / set_setting / unset_setting = the v2.6 settings layer (TOML user-level + YAML project-level, layered resolution). ' +
+            'subagent_list / subagent_get / subagent_create / subagent_update / subagent_delete = persistent subagent registry; the claude adapter uses the active subagent (defaults.subagent setting) on the subscription auth path.',
         inputSchema: {
             action: z
                 .enum([
@@ -30,9 +33,16 @@ export function registerConfigTool(server) {
                 'reload_skills',
                 'list_tasks',
                 'cancel_task',
-                'get',
-                'set',
-                'reset',
+                // v2.6.0 — settings layer.
+                'get_settings',
+                'set_setting',
+                'unset_setting',
+                // v2.6.0 — subagent registry.
+                'subagent_list',
+                'subagent_get',
+                'subagent_create',
+                'subagent_update',
+                'subagent_delete',
             ])
                 .describe('Action to perform.'),
             // Optional input for cancel_task / list_tasks.
@@ -49,6 +59,34 @@ export function registerConfigTool(server) {
                 .boolean()
                 .optional()
                 .describe('v2.3 — when true, list_adapters runs cheap local auth probes (R-DIAG-D.3). Defaults to false.'),
+            // v2.6.0 — settings layer.
+            key: z
+                .string()
+                .optional()
+                .describe('v2.6.0 — dotted-path setting key for set_setting/unset_setting (e.g., "defaults.adapter").'),
+            value: z
+                .union([z.string(), z.number(), z.boolean()])
+                .optional()
+                .describe('v2.6.0 — value for set_setting.'),
+            scope: z
+                .enum(['user', 'project'])
+                .optional()
+                .describe('v2.6.0 — scope for set_setting/unset_setting. "user" writes to ~/.config/asyncthink/settings.toml; "project" writes to .claude/asyncthink.local.md in cwd. Default: "user".'),
+            // v2.6.0 — subagent registry.
+            subagentId: z
+                .string()
+                .optional()
+                .describe('v2.6.0 — subagent id (subagent_get/update/delete).'),
+            subagent: z
+                .object({
+                name: z.string().optional(),
+                description: z.string().optional(),
+                prompt: z.string().optional(),
+                tools: z.array(z.string()).optional(),
+                model: z.string().optional(),
+            })
+                .optional()
+                .describe('v2.6.0 — subagent fields for subagent_create (name, description, prompt required) or subagent_update (any subset as a patch).'),
         },
     }, async (args) => {
         const action = args.action;
@@ -151,14 +189,146 @@ export function registerConfigTool(server) {
                 }
                 break;
             }
-            case 'get':
-            case 'set':
-            case 'reset':
-                payload = {
-                    status: 'not_implemented',
-                    note: 'General config persistence ships in v2.3+. v2.2 surface is read-only via list_adapters / list_skills / list_tasks plus the cancel_task action.',
-                };
+            // v2.6.0 — settings layer.
+            case 'get_settings': {
+                const settings = await getSettingsStore().get();
+                payload = settings;
                 break;
+            }
+            case 'set_setting': {
+                if (!args.key || args.value === undefined) {
+                    payload = {
+                        error: 'invalid_args',
+                        message: 'set_setting requires `key` and `value`.',
+                    };
+                    break;
+                }
+                const scope = args.scope ?? 'user';
+                try {
+                    const updated = await getSettingsStore().set(args.key, args.value, scope);
+                    payload = updated;
+                }
+                catch (err) {
+                    payload = {
+                        error: 'settings_error',
+                        message: err instanceof Error ? err.message : String(err),
+                    };
+                }
+                break;
+            }
+            case 'unset_setting': {
+                if (!args.key) {
+                    payload = { error: 'invalid_args', message: 'unset_setting requires `key`.' };
+                    break;
+                }
+                const scope = args.scope ?? 'user';
+                try {
+                    const updated = await getSettingsStore().unset(args.key, scope);
+                    payload = updated;
+                }
+                catch (err) {
+                    payload = {
+                        error: 'settings_error',
+                        message: err instanceof Error ? err.message : String(err),
+                    };
+                }
+                break;
+            }
+            // v2.6.0 — subagent registry.
+            case 'subagent_list': {
+                const subagents = await getSubagentRegistry().list();
+                payload = { subagents };
+                break;
+            }
+            case 'subagent_get': {
+                if (!args.subagentId) {
+                    payload = {
+                        error: 'invalid_args',
+                        message: 'subagent_get requires `subagentId`.',
+                    };
+                    break;
+                }
+                const subagent = await getSubagentRegistry().get(args.subagentId);
+                payload = subagent
+                    ? subagent
+                    : { error: 'subagent_not_found', subagentId: args.subagentId };
+                break;
+            }
+            case 'subagent_create': {
+                if (!args.subagent ||
+                    !args.subagent.name ||
+                    !args.subagent.description ||
+                    !args.subagent.prompt) {
+                    payload = {
+                        error: 'invalid_args',
+                        message: 'subagent_create requires `subagent.{name, description, prompt}` (all non-empty).',
+                    };
+                    break;
+                }
+                try {
+                    const created = await getSubagentRegistry().create({
+                        name: args.subagent.name,
+                        description: args.subagent.description,
+                        prompt: args.subagent.prompt,
+                        tools: args.subagent.tools,
+                        model: args.subagent.model,
+                    });
+                    payload = created;
+                }
+                catch (err) {
+                    payload = {
+                        error: 'subagent_error',
+                        message: err instanceof Error ? err.message : String(err),
+                    };
+                }
+                break;
+            }
+            case 'subagent_update': {
+                if (!args.subagentId || !args.subagent) {
+                    payload = {
+                        error: 'invalid_args',
+                        message: 'subagent_update requires `subagentId` and `subagent` patch.',
+                    };
+                    break;
+                }
+                try {
+                    const updated = await getSubagentRegistry().update(args.subagentId, {
+                        name: args.subagent.name,
+                        description: args.subagent.description,
+                        prompt: args.subagent.prompt,
+                        tools: args.subagent.tools,
+                        model: args.subagent.model,
+                    });
+                    payload = updated;
+                }
+                catch (err) {
+                    payload = {
+                        error: 'subagent_error',
+                        message: err instanceof Error ? err.message : String(err),
+                    };
+                }
+                break;
+            }
+            case 'subagent_delete': {
+                if (!args.subagentId) {
+                    payload = {
+                        error: 'invalid_args',
+                        message: 'subagent_delete requires `subagentId`.',
+                    };
+                    break;
+                }
+                try {
+                    const result = await getSubagentRegistry().delete(args.subagentId);
+                    payload = result;
+                }
+                catch (err) {
+                    payload = {
+                        error: 'subagent_error',
+                        message: err instanceof Error ? err.message : String(err),
+                    };
+                }
+                break;
+            }
             default:
                 payload = { status: 'error', error: `Unknown action: ${String(action)}` };
         }

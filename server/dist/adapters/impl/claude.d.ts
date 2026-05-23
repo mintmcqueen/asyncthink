@@ -17,8 +17,11 @@
  * default in --print mode.
  */
 import type { Adapter, AdapterInvocation, AdapterResult } from '../../core/adapter.js';
+import type { AuditLog } from '../../core/auditLog.js';
 import type { Executor } from '../../core/executor.js';
 import type { IntelligenceTier } from '../../core/manifests.js';
+import type { SettingsStore } from '../../core/settings.js';
+import type { SubagentRegistry } from '../../core/subagent.js';
 export declare class ClaudeAdapter implements Adapter {
     readonly id: "claude";
     readonly readOnly: true;
@@ -26,10 +29,19 @@ export declare class ClaudeAdapter implements Adapter {
     private readonly defaultTimeoutMs;
     private readonly tiers;
     private readonly defaultTier;
+    private readonly settingsStore?;
+    private readonly subagentRegistry?;
+    private readonly auditLog?;
     constructor(opts?: {
         defaultTimeoutMs?: number;
         tiers?: Record<IntelligenceTier, string>;
         defaultTier?: IntelligenceTier;
+        /** v2.6.0 — resolves defaults.subagent for the subscription-path spawn. */
+        settingsStore?: SettingsStore;
+        /** v2.6.0 — supplies the Subagent definition matched by settings. */
+        subagentRegistry?: SubagentRegistry;
+        /** v2.6.0 — receives claude.subagent.spawn audit events. */
+        auditLog?: AuditLog;
     });
     invoke(inv: AdapterInvocation, exec: Executor): Promise<AdapterResult>;
 }

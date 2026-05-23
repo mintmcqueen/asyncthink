@@ -87,6 +87,12 @@ export type AuditEvent = {
     emittedServers: number;
     sourceConfigPresent: boolean;
     authLinked: boolean;
+} | {
+    kind: 'claude.subagent.spawn';
+    subagentId: string;
+    subagentName: string;
+    authPath: string;
+    model: string;
 };
 export interface AuditLog {
     /** Record an event. Should never throw to the caller; log internally on failure. */
