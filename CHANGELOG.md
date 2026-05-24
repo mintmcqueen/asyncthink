@@ -10,6 +10,24 @@ All notable changes to AsyncThink are documented here. The format follows [Keep 
 - Set plugin and marketplace author to `mintmcqueen`.
 - GitHub default branch set to `develop` so plugin installs pull v2 code by default.
 
+## [2.7.2] — 2026-05-24
+
+**Boot-blocker fix.** v2.4 dropped `dotenv` from `package.json` but left a side-effect import (`import 'dotenv/config';`) at line 11 of `src/index.ts`. The v2.4 cleanup grep matched `from 'dotenv'` and `dotenv.` but missed the side-effect form. Tests never imported `src/index.ts` so vitest passed; the MCP server crashed at boot with `ERR_MODULE_NOT_FOUND: Cannot find package 'dotenv'` on every Claude Code restart from v2.4 through v2.7.1. Discovered when post-restart MCP reconnect failed during the v2.7.1 playtest.
+
+### Fixed
+- Removed `import 'dotenv/config';` from `src/index.ts`. The server has not used dotenv since v2.4 — the import was dead.
+
+### Added — regression guard
+- `__tests__/integration/bootSmoke.test.ts` — spawns `node dist/index.js` as a subprocess, asserts exit-0, the version banner appears on stderr, and there's no `ERR_MODULE_NOT_FOUND` / `Cannot find package` anywhere in output. **Permanently catches the "entry-point silently broken" class of bug** — any future dep we drop without cleaning its imports surfaces here.
+
+### Footprint
+- 353 total (was 352). 1 new integration spec.
+- Lesson banked for the doc-driven testing follow-up (item H from the v2.7.0 confidence review): every release must exercise the actual entry point, not just the modules it imports.
+
+### Practical impact
+- If you've been on v2.4+ and the MCP server "worked" in your Claude Code session, you were running a cached older boot OR the plugin manager retried successfully somehow — but new restarts on a fresh node_modules silently fail. v2.7.2 boots cleanly.
+- After install, run `node ~/.claude/plugins/cache/asyncthink-local/asyncthink/2.7.2/server/dist/index.js < /dev/null` to manually verify boot succeeds (exits 0 within ~2s, prints `[AsyncThink] v2.7.2 running on stdio`).
+
 ## [2.7.1] — 2026-05-24
 
 Test-only patch: adds permanent regression guards for the v2.6/v2.7 subagent injection. No behavior change.
