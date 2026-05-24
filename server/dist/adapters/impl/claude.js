@@ -59,19 +59,34 @@ export class ClaudeAdapter {
         // narrowed tool set). On non-subscription paths (api / vertex / bedrock)
         // the subagent injection is skipped — those routes already isolate via
         // their own credential boundary.
+        //
+        // v2.7.0 — precedence for subagent resolution:
+        //   1. inv.subagent (caller-supplied; per-fork override)
+        //   2. settings effective defaults.subagent (user/project layer)
+        //   3. builtin "asyncthink-delegate" (BUILTIN_DEFAULTS in settings.ts)
+        // Skill frontmatter `subagent:` resolves into inv.subagent at the
+        // tool-handler layer (delegate.tool / asyncthink.tool), so it shows up
+        // here as a caller-supplied value with the right precedence.
         const authPath = detectAuthPath('claude');
         let subagent;
-        if (authPath === 'subscription' && this.settingsStore && this.subagentRegistry) {
-            try {
-                const settings = await this.settingsStore.get();
-                const subagentId = settings.effective?.defaults?.subagent;
-                if (subagentId) {
-                    subagent = await this.subagentRegistry.get(subagentId);
+        if (authPath === 'subscription' && this.subagentRegistry) {
+            let subagentId = inv.subagent;
+            if (!subagentId && this.settingsStore) {
+                try {
+                    const settings = await this.settingsStore.get();
+                    subagentId = settings.effective?.defaults?.subagent;
+                }
+                catch {
+                    // Settings failure → fall through to no-subagent spawn.
                 }
             }
-            catch {
-                // Settings/registry failures must not break a spawn; fall back to
-                // unsubagented invocation.
+            if (subagentId) {
+                try {
+                    subagent = await this.subagentRegistry.get(subagentId);
+                }
+                catch {
+                    // Registry failure → fall through to no-subagent spawn.
+                }
             }
             if (subagent) {
                 const agentsJson = renderAgentsJson(subagent);

@@ -24,7 +24,7 @@ import { FsSkillRegistry } from './stores/skillRegistry.js';
 import { JsonlAuditLog } from './stores/jsonlAuditLog.js';
 import { FsSettingsStore } from './stores/fsSettingsStore.js';
 import { FsSubagentRegistry } from './stores/fsSubagentRegistry.js';
-import { DEFAULT_ASYNCTHINK_DELEGATE } from './core/subagent.js';
+import { BUILTIN_SUBAGENTS } from './core/subagent.js';
 import { Delegate } from './delegate/delegate.js';
 import { Council } from './asyncthink/council.js';
 import { AsyncThinkingServer } from './asyncthink/thinking.js';
@@ -132,7 +132,7 @@ export function getSubagentRegistry(): FsSubagentRegistry {
  */
 export async function bootstrapBuiltins(): Promise<void> {
   try {
-    await subagentRegistry.bootstrapBuiltins([DEFAULT_ASYNCTHINK_DELEGATE]);
+    await subagentRegistry.bootstrapBuiltins(BUILTIN_SUBAGENTS);
   } catch (err) {
     console.error(
       `[AsyncThink] Subagent bootstrap failed (non-fatal): ${(err as Error).message}`

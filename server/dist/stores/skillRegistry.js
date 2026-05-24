@@ -154,6 +154,7 @@ async function loadSkillFile(path, name, source) {
     const preflight = fm.preflight === 'auth' || fm.preflight === 'none' ? fm.preflight : undefined;
     const authPath = typeof fm.auth_path === 'string' ? fm.auth_path : undefined;
     const bypassRateLimit = typeof fm.bypass_rate_limit === 'boolean' ? fm.bypass_rate_limit : undefined;
+    const subagent = typeof fm.subagent === 'string' ? fm.subagent : undefined;
     return {
         name,
         adapter: fm.adapter,
@@ -170,6 +171,7 @@ async function loadSkillFile(path, name, source) {
         preflight,
         authPath,
         bypassRateLimit,
+        subagent,
     };
 }
 /**

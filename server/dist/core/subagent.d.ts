@@ -97,6 +97,33 @@ export interface BuiltinSubagent {
  */
 export declare const DEFAULT_ASYNCTHINK_DELEGATE: BuiltinSubagent;
 /**
+ * v2.7.0 — code-review panel. Four built-in subagents, each with a tight
+ * single-axis focus, designed to be spawned in parallel via an asyncthink
+ * fork chain. Each is intentionally narrow so the orchestrator gets four
+ * non-overlapping perspectives rather than four restatements of the same
+ * "looks fine" review.
+ *
+ * The /asyncthink:review-pr slash command spawns all four against the
+ * current branch's diff. Callers can also pin one individually via
+ * `delegate({adapter: 'claude', subagent: '<id>', ...})`.
+ *
+ * All four are read-only — they may navigate, grep, and (optionally)
+ * pull external context via WebFetch/WebSearch, but never edit, exec,
+ * or write. This mirrors AsyncThink's plugin-wide "subordinates are
+ * read-only" invariant.
+ */
+export declare const SECURITY_REVIEW_SUBAGENT: BuiltinSubagent;
+export declare const SIMPLIFY_REVIEW_SUBAGENT: BuiltinSubagent;
+export declare const TEST_COVERAGE_REVIEW_SUBAGENT: BuiltinSubagent;
+export declare const CORRECTNESS_REVIEW_SUBAGENT: BuiltinSubagent;
+/**
+ * Convenience: all built-in subagents shipped in v2.7.0. Bootstrap via
+ * `subagentRegistry.bootstrapBuiltins(BUILTIN_SUBAGENTS)`.
+ */
+export declare const BUILTIN_SUBAGENTS: BuiltinSubagent[];
+/** Ids of the four code-review panel subagents — spawned together by /asyncthink:review-pr. */
+export declare const CODE_REVIEW_PANEL_IDS: readonly ["security-review", "simplify-review", "test-coverage-review", "correctness-review"];
+/**
  * Sanitize a free-form name to a stable id slug. Maps non-alphanumerics to
  * dash, collapses runs, trims edges, lowercases, caps at 64 chars.
  *

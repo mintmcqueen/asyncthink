@@ -62,6 +62,16 @@ export interface AdapterInvocation {
      * filtered MCP-server config. Other adapters may ignore.
      */
     threadId?: string;
+    /**
+     * v2.7.0 — per-call subagent override for the claude adapter on the
+     * subscription auth path. Resolution precedence: this field > skill
+     * frontmatter `subagent:` > settings `defaults.subagent` > built-in
+     * `asyncthink-delegate`. Non-claude adapters ignore. Lets the asyncthink
+     * tool spawn parallel forks with DIFFERENT personas — e.g., a 4-fork
+     * code-review chain with security/simplify/test-coverage/correctness
+     * subagents at once.
+     */
+    subagent?: string;
 }
 export interface AdapterResult {
     /** Plain-text response from the subordinate. */

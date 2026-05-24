@@ -76,6 +76,8 @@ export interface ForkRequest {
   authPath?: string;
   /** v2.3.3 — opt-out of the rate-limit refuse on this fork. */
   bypassRateLimit?: boolean;
+  /** v2.7.0 — per-fork subagent override for claude adapter (subscription auth). */
+  subagent?: string;
 }
 
 export interface ChainStatus {
@@ -217,6 +219,8 @@ export class Council {
           mcpServers: req.mcpServers,
           // v2.5.0 — threadId for codex $CODEX_HOME overlay scoping.
           threadId: childThreadId,
+          // v2.7.0 — per-fork subagent override for claude subscription auth.
+          subagent: req.subagent,
         },
         this.executor
       );

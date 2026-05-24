@@ -127,6 +127,8 @@ export class Council {
                 mcpServers: req.mcpServers,
                 // v2.5.0 — threadId for codex $CODEX_HOME overlay scoping.
                 threadId: childThreadId,
+                // v2.7.0 — per-fork subagent override for claude subscription auth.
+                subagent: req.subagent,
             }, this.executor);
             // v2.3.1 (B2): consume the rate-limit slot only after invoke succeeds.
             if (rateLimitSlotPush)

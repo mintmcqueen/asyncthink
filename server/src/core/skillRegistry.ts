@@ -67,6 +67,14 @@ export interface Skill {
   authPath?: string;
   /** v2.3.3 — opt-out of the rate-limit refuse for invocations using this skill. */
   bypassRateLimit?: boolean;
+  /**
+   * v2.7.0 — subagent id pinned by this skill (claude adapter, subscription
+   * auth path only). When set, this skill's invocations spawn with the
+   * named subagent persona unless the caller supplies their own override.
+   * Frontmatter key: `subagent:`. Non-claude adapters / non-subscription
+   * paths ignore.
+   */
+  subagent?: string;
 }
 
 export interface SkillRegistry {

@@ -42,6 +42,8 @@ export interface ResolvedSkill {
   authPath?: string;
   /** v2.3.3 — opt-out of rate-limit refuse from skill frontmatter. */
   bypassRateLimit?: boolean;
+  /** v2.7.0 — subagent id pinned by skill frontmatter (`subagent:` key). */
+  subagent?: string;
 }
 
 export interface SkillResolutionInput {
@@ -149,6 +151,7 @@ export async function resolveSkill(
     preflight: skill.preflight,
     authPath: skill.authPath,
     bypassRateLimit: skill.bypassRateLimit,
+    subagent: skill.subagent,
   };
 }
 

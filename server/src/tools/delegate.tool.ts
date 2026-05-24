@@ -140,6 +140,12 @@ export function registerDelegateTools(server: McpServer): void {
           .describe(
             "v2.3.3 — opt out of pre-flight rate-limit refuse. Caller assumes 429 risk; an audit event records the bypass."
           ),
+        subagent: z
+          .string()
+          .optional()
+          .describe(
+            'v2.7.0 — subagent id (from the registry) to use for this call. Applies only when adapter resolves to "claude" on the subscription auth path. Resolution precedence: this > skill `subagent:` frontmatter > settings `defaults.subagent` > built-in `asyncthink-delegate`.'
+          ),
       },
     },
     async (args) => {
@@ -155,6 +161,7 @@ export function registerDelegateTools(server: McpServer): void {
       let preflight = args.preflight;
       let authPath = args.authPath;
       let bypassRateLimit = args.bypassRateLimit;
+      let subagent = args.subagent;
       if (args.skill) {
         const resolved = await resolveSkill(
           getSkillRegistry(),
@@ -184,6 +191,8 @@ export function registerDelegateTools(server: McpServer): void {
         // v2.3.3 — caller authPath/bypassRateLimit wins; skill provides default.
         authPath = args.authPath ?? resolved.authPath;
         bypassRateLimit = args.bypassRateLimit ?? resolved.bypassRateLimit;
+        // v2.7.0 — caller subagent wins; skill provides default.
+        subagent = args.subagent ?? resolved.subagent;
       }
       // v2.6.0 — fall back to the settings layer when neither caller-supplied
       // adapter nor skill (which pins one) were provided. Resolution chain:
@@ -217,6 +226,7 @@ export function registerDelegateTools(server: McpServer): void {
             preflight,
             authPath,
             bypassRateLimit,
+            subagent,
           });
           return {
             content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
@@ -238,6 +248,7 @@ export function registerDelegateTools(server: McpServer): void {
           mcpServers,
           authPath,
           bypassRateLimit,
+          subagent,
         });
         return {
           content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
