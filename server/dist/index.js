@@ -7,7 +7,6 @@
  *   delegate_list_threads, asyncthink_config,
  *   tasks_get, tasks_list, tasks_cancel, tasks_result
  */
-import 'dotenv/config';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { readFileSync } from 'fs';
