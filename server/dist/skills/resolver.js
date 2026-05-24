@@ -86,6 +86,7 @@ export async function resolveSkill(registry, input, ctx = {}) {
         preflight: skill.preflight,
         authPath: skill.authPath,
         bypassRateLimit: skill.bypassRateLimit,
+        subagent: skill.subagent,
     };
 }
 function composePrompt(promptBody, callerPrompt) {

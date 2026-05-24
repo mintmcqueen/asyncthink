@@ -68,6 +68,8 @@ export interface ForkRequest {
     authPath?: string;
     /** v2.3.3 — opt-out of the rate-limit refuse on this fork. */
     bypassRateLimit?: boolean;
+    /** v2.7.0 — per-fork subagent override for claude adapter (subscription auth). */
+    subagent?: string;
 }
 export interface ChainStatus {
     pending: string[];

@@ -157,20 +157,76 @@ describe('ClaudeAdapter — subagent injection', () => {
       // Create a new subagent and point settings at it.
       const subagentRegistry = new FsSubagentRegistry({ storageDir });
       await subagentRegistry.create({
-        name: 'Security Review',
+        name: 'Security Review Local',
         description: 'Security-focused code review',
         prompt: 'You are a security reviewer. Focus on injection vectors.',
         tools: ['Read', 'Grep'],
       });
-      await settingsStore.set('defaults.subagent', 'security-review', 'user');
+      await settingsStore.set('defaults.subagent', 'security-review-local', 'user');
       const exec = new RecordingExecutor();
       await adapter.invoke({ prompt: 'test', intelligence: 'med' }, exec);
       const agentsIdx = exec.lastArgv.indexOf('--agents');
       const agentsJson = exec.lastArgv[agentsIdx + 1];
       const parsed = JSON.parse(agentsJson);
-      expect(parsed['security-review']).toBeTruthy();
-      expect(parsed['security-review'].prompt).toContain('security reviewer');
-      expect(exec.lastArgv).toContain('security-review');
+      expect(parsed['security-review-local']).toBeTruthy();
+      expect(parsed['security-review-local'].prompt).toContain('security reviewer');
+      expect(exec.lastArgv).toContain('security-review-local');
+    } finally {
+      if (prevApiKey !== undefined) process.env.ANTHROPIC_API_KEY = prevApiKey;
+    }
+  });
+
+  // v2.7.0 — per-call subagent override.
+  it('per-call inv.subagent wins over settings default', async () => {
+    const prevApiKey = process.env.ANTHROPIC_API_KEY;
+    delete process.env.ANTHROPIC_API_KEY;
+    try {
+      const { adapter, settingsStore } = await buildAdapter();
+      const subagentRegistry = new FsSubagentRegistry({ storageDir });
+      // Settings default = security-review (one of the v2.7 builtins).
+      await subagentRegistry.create({
+        name: 'Security Review Inline',
+        description: 'security',
+        prompt: 'You are a security reviewer.',
+      });
+      await settingsStore.set('defaults.subagent', 'security-review-inline', 'user');
+      // Bootstrap a different built-in.
+      await subagentRegistry.create({
+        name: 'Simplify Review Inline',
+        description: 'simplify',
+        prompt: 'You are a simplicity reviewer.',
+      });
+      const exec = new RecordingExecutor();
+      // Caller asks specifically for simplify; should override the default.
+      await adapter.invoke(
+        { prompt: 'test', intelligence: 'med', subagent: 'simplify-review-inline' },
+        exec
+      );
+      expect(exec.lastArgv).toContain('simplify-review-inline');
+      expect(exec.lastArgv).not.toContain('security-review-inline');
+    } finally {
+      if (prevApiKey !== undefined) process.env.ANTHROPIC_API_KEY = prevApiKey;
+    }
+  });
+
+  it('per-call inv.subagent that does not exist falls back to NO spawn (not to settings default)', async () => {
+    // Design choice: if the caller EXPLICITLY asked for a subagent that
+    // doesn't exist, that's a caller bug; we should not silently route to
+    // some other persona. We fall back to no-subagent spawn.
+    const prevApiKey = process.env.ANTHROPIC_API_KEY;
+    delete process.env.ANTHROPIC_API_KEY;
+    try {
+      const { adapter, settingsStore, auditLog } = await buildAdapter();
+      await settingsStore.set('defaults.subagent', 'asyncthink-delegate', 'user');
+      const exec = new RecordingExecutor();
+      await adapter.invoke(
+        { prompt: 'test', intelligence: 'med', subagent: 'totally-made-up' },
+        exec
+      );
+      expect(exec.lastArgv).not.toContain('--agents');
+      expect(exec.lastArgv).not.toContain('totally-made-up');
+      expect(exec.lastArgv).not.toContain('asyncthink-delegate');
+      expect(auditLog.events.filter((e) => e.kind === 'claude.subagent.spawn')).toHaveLength(0);
     } finally {
       if (prevApiKey !== undefined) process.env.ANTHROPIC_API_KEY = prevApiKey;
     }

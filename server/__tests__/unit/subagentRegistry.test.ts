@@ -9,6 +9,8 @@ import { tmpdir } from 'node:os';
 
 import { FsSubagentRegistry } from '../../src/stores/fsSubagentRegistry.js';
 import {
+  BUILTIN_SUBAGENTS,
+  CODE_REVIEW_PANEL_IDS,
   DEFAULT_ASYNCTHINK_DELEGATE,
   slugifyName,
 } from '../../src/core/subagent.js';
@@ -165,5 +167,42 @@ describe('FsSubagentRegistry — bootstrapBuiltins', () => {
     const raw = readFileSync(join(storageDir, 'asyncthink-delegate.json'), 'utf8');
     const parsed = JSON.parse(raw);
     expect(parsed.schemaVersion).toBe(1);
+  });
+
+  // v2.7.0 — code-review panel built-ins.
+  it('BUILTIN_SUBAGENTS bootstraps all 5 personas (delegate + 4 review panel)', async () => {
+    const r = new FsSubagentRegistry({ storageDir });
+    await r.bootstrapBuiltins(BUILTIN_SUBAGENTS);
+    const ids = (await r.list()).map((s) => s.id);
+    expect(ids).toContain('asyncthink-delegate');
+    expect(ids).toContain('security-review');
+    expect(ids).toContain('simplify-review');
+    expect(ids).toContain('test-coverage-review');
+    expect(ids).toContain('correctness-review');
+  });
+
+  it('all panel subagents marked isBuiltIn=true', async () => {
+    const r = new FsSubagentRegistry({ storageDir });
+    await r.bootstrapBuiltins(BUILTIN_SUBAGENTS);
+    for (const id of CODE_REVIEW_PANEL_IDS) {
+      const sa = await r.get(id);
+      expect(sa?.isBuiltIn).toBe(true);
+    }
+  });
+
+  it('each panel subagent has a non-trivial system prompt + read-only tools', async () => {
+    const r = new FsSubagentRegistry({ storageDir });
+    await r.bootstrapBuiltins(BUILTIN_SUBAGENTS);
+    for (const id of CODE_REVIEW_PANEL_IDS) {
+      const sa = await r.get(id);
+      expect(sa).toBeTruthy();
+      expect(sa!.prompt.length).toBeGreaterThan(200); // not a stub
+      expect(sa!.tools).toBeTruthy();
+      // None of the panel reviewers should have Bash, Edit, Write, etc.
+      const forbidden = new Set(['Bash', 'Edit', 'Write', 'NotebookEdit']);
+      for (const t of sa!.tools ?? []) {
+        expect(forbidden.has(t)).toBe(false);
+      }
+    }
   });
 });

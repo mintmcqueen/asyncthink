@@ -578,6 +578,8 @@ export class LocalInProcessTaskExecutor {
                 // v2.5.0 — threadId enables the codex adapter to scope its
                 // $CODEX_HOME overlay per AsyncThink thread (multi-turn safe).
                 threadId: childThreadId,
+                // v2.7.0 — per-call subagent override for claude subscription auth.
+                subagent: req.subagent,
             }, exec);
             envelope = {
                 text: result.text,

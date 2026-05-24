@@ -144,6 +144,8 @@ export class Delegate {
             mcpServers: req.mcpServers,
             // v2.5.0 — threadId for codex $CODEX_HOME overlay scoping.
             threadId,
+            // v2.7.0 — per-call subagent override for claude subscription auth.
+            subagent: req.subagent,
         }, this.executor);
         // v2.3.1 (B2): consume the rate-limit slot only after invoke succeeds.
         if (rateLimitSlotPush)
@@ -230,6 +232,8 @@ export class Delegate {
             // Fields are now first-class on TaskExecutorRequest (v2.3.1 B1).
             mcpServers: req.mcpServers,
             preflight: req.preflight,
+            // v2.7.0 — per-call subagent override for claude subscription auth.
+            subagent: req.subagent,
         });
         return {
             taskId: state.taskId,

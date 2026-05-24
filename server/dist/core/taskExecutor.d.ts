@@ -70,6 +70,13 @@ export interface TaskExecutorRequest {
      * gate logs an audit event and lets the call through unchecked.
      */
     bypassRateLimit?: boolean;
+    /**
+     * v2.7.0 — per-call subagent override for claude adapter (subscription
+     * auth). Forwarded as `inv.subagent` to adapter.invoke; claude precedence
+     * is caller > skill > settings default > built-in. Non-claude adapters
+     * ignore.
+     */
+    subagent?: string;
 }
 export interface TaskExecutorResultEnvelope {
     /** Adapter response text. */

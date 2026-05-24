@@ -10,6 +10,49 @@ All notable changes to AsyncThink are documented here. The format follows [Keep 
 - Set plugin and marketplace author to `mintmcqueen`.
 - GitHub default branch set to `develop` so plugin installs pull v2 code by default.
 
+## [2.7.0] — 2026-05-24
+
+Discoverable configuration + four-reviewer code-review panel. Wraps the v2.6 `asyncthink_config` actions in a natural-language slash command, adds four built-in code-review subagents (each tuned for one axis), wires a per-call subagent override so a single asyncthink chain can spawn forks with DIFFERENT personas in parallel, and rebuilds `/asyncthink:review-pr` around the panel pattern.
+
+### Added — `/asyncthink:config` slash command
+- **`commands/config.md`** — natural-language wrapper around all eight v2.6 `asyncthink_config` settings + subagent actions. The user types `/asyncthink:config switch default to gemini` or `/asyncthink:config create a security-focused subagent` and the orchestrator translates intent into the right tool call.
+- Includes a translation rubric: 8 intent buckets (view, switch adapter, switch subagent, clear, create, update, delete, ambiguous) with explicit guidance on `scope` defaults, confirmation requirements (delete needs confirm, project scope is opt-in), and output-formatting rules (compact tables, never JSON dumps).
+
+### Added — four built-in code-review subagents
+Bootstrapped on first server boot alongside `asyncthink-delegate`. Each has a tight single-axis focus + read-only tool set, designed to spawn in parallel via an `asyncthink` fork chain:
+
+| Subagent id | Focus | Tools |
+|---|---|---|
+| `security-review` | Adversarial: OWASP, injection, auth bypass, secrets, supply-chain, attack-surface inflation | `Read, Grep, Glob, WebSearch` |
+| `simplify-review` | Anti-bloat: premature abstractions, defensive over-engineering, dead code, speculative generality, comment/code drift | `Read, Grep, Glob` |
+| `test-coverage-review` | Behavioral coverage gaps: untested error paths, boundary cases, weak assertions, tests-that-pass-by-accident, missing contract tests | `Read, Grep, Glob` |
+| `correctness-review` | Logic + concurrency + edges: races, off-by-one, contract violations, error-handling mismatches, implicit assumptions | `Read, Grep, Glob` |
+
+Each system prompt enforces structured output (numbered findings with file:line, severity, concrete scenario), forbids fix recommendations (their job is finding, not fixing), and instructs them to say "no issues found" rather than pad. New `BUILTIN_SUBAGENTS` array + `CODE_REVIEW_PANEL_IDS` constant exported from `core/subagent.ts`.
+
+### Added — per-call subagent override
+- `AdapterInvocation.subagent?: string`, `TaskExecutorRequest.subagent?: string`, `DelegateRequest.subagent?: string`, `ForkRequest.subagent?: string`, `Skill.subagent?: string` (from frontmatter `subagent:`).
+- Resolution precedence in claude adapter: **caller > skill > settings `defaults.subagent` > built-in `asyncthink-delegate`**.
+- A missing-on-caller-override is a hard fallback to NO subagent (not to settings default) — design choice: if the caller explicitly named a subagent that doesn't exist, that's a caller bug and we shouldn't silently substitute.
+- This is the wire that enables multi-persona parallel forks. A single `asyncthink` chain can now spawn `[{subagent: 'security-review'}, {subagent: 'simplify-review'}, {subagent: 'test-coverage-review'}, {subagent: 'correctness-review'}]` and get four non-overlapping perspectives in one round trip.
+
+### Changed — `/asyncthink:review-pr` is now a panel
+- Refactored `commands/review-pr.md` to spawn the 4-subagent panel via `asyncthink` forks (two thoughts: spawn, then close-with-auto-wait).
+- Findings are aggregated security-first, then correctness, test-coverage, and simplify. Agreements between reviewers are flagged as high signal; disagreements as worth investigating.
+- The previous codex-based `code-review` skill flow is preserved as a documented alternative for users who prefer codex single-perspective and have `OPENAI_API_KEY`.
+
+### Tool surface
+- `delegate({subagent: "..."})` and `asyncthink({forks: [{subagent: "..."}]})` accept the new field. Skill frontmatter accepts `subagent:` key.
+
+### Tests
+- 5 new specs in `__tests__/unit/claudeAdapterSubagent.test.ts` (per-call override wins over settings default; missing per-call override falls back to no-spawn not to settings default).
+- 3 new specs in `__tests__/unit/subagentRegistry.test.ts` (BUILTIN_SUBAGENTS bootstraps all 5; all panel subagents marked isBuiltIn; each has substantive prompt + read-only tools, verified no Bash/Edit/Write in any tool list).
+- Total: 342 (up from 337). 0 vulnerabilities post-`npm install`.
+
+### Migration
+- Fully additive. v2.6 callers continue to work; the new `subagent` field is optional everywhere. On first server boot post-install, the four new built-in subagents materialize at `~/.local/share/asyncthink/subagents/<id>.json` (idempotent — user customizations win on subsequent boots).
+- `/asyncthink:review-pr` behavior changes from single-reviewer (codex) to four-reviewer (claude panel). Users wanting the old behavior can `delegate({skill: "code-review"})` directly.
+
 ## [2.6.0] — 2026-05-23
 
 Settings layer + Subagent registry. Replaces v2.5.1's `ASYNCTHINK_DEFAULT_ADAPTER` env var (which was a 30-minute fix) with a durable, layered persistence model. Built atop two new core abstractions that ship in their v3-portable interfaces from day one.

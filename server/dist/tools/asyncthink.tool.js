@@ -81,6 +81,10 @@ export function registerAsyncThinkTool(server) {
                     .boolean()
                     .optional()
                     .describe("v2.3.3 — opt out of pre-flight rate-limit refuse for this fork. Caller assumes 429 risk."),
+                subagent: z
+                    .string()
+                    .optional()
+                    .describe('v2.7.0 — subagent id for this fork. Applies only when the fork resolves to the claude adapter on the subscription auth path. Powers parallel multi-persona reviews (e.g. spawning security-review + simplify-review + test-coverage-review + correctness-review forks at once).'),
             }))
                 .optional()
                 .describe('Forks to spawn during this thought.'),
@@ -132,6 +136,7 @@ export function registerAsyncThinkTool(server) {
                     let preflight = f.preflight;
                     let forkAuthPath = f.authPath;
                     let forkBypassRateLimit = f.bypassRateLimit;
+                    let forkSubagent = f.subagent;
                     if (f.skill) {
                         const resolved = await resolveSkill(getSkillRegistry(), {
                             skill: f.skill,
@@ -154,6 +159,8 @@ export function registerAsyncThinkTool(server) {
                         // v2.3.3 — caller authPath/bypass wins; skill provides default.
                         forkAuthPath = f.authPath ?? resolved.authPath;
                         forkBypassRateLimit = f.bypassRateLimit ?? resolved.bypassRateLimit;
+                        // v2.7.0 — caller subagent wins; skill provides default.
+                        forkSubagent = f.subagent ?? resolved.subagent;
                     }
                     // v2.6.0 — settings-layer default applies per-fork when neither
                     // caller adapter nor skill was supplied. Resolution chain:
@@ -192,6 +199,8 @@ export function registerAsyncThinkTool(server) {
                             // v2.3.3 — caller flexibility levers for async fork.
                             authPath: forkAuthPath,
                             bypassRateLimit: forkBypassRateLimit,
+                            // v2.7.0 — per-fork subagent for claude subscription auth.
+                            subagent: forkSubagent,
                         });
                         detachedTaskIds.push({ forkId: f.id, taskId: state.taskId });
                         continue;
@@ -212,6 +221,8 @@ export function registerAsyncThinkTool(server) {
                         // v2.3.3 — caller flexibility levers for sync fork.
                         ...(forkAuthPath !== undefined && { authPath: forkAuthPath }),
                         ...(forkBypassRateLimit !== undefined && { bypassRateLimit: forkBypassRateLimit }),
+                        // v2.7.0 — per-fork subagent for claude subscription auth.
+                        ...(forkSubagent !== undefined && { subagent: forkSubagent }),
                     });
                 }
                 catch (e) {

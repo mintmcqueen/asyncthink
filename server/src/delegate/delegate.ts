@@ -96,6 +96,13 @@ export interface DelegateRequest {
    * Emits a `task.bypass_rate_limit` audit event for observability.
    */
   bypassRateLimit?: boolean;
+  /**
+   * v2.7.0 — per-call subagent override for claude adapter subscription
+   * auth. Pins which Subagent persona spawns this delegate. Resolution
+   * precedence: this > skill `subagent:` > settings `defaults.subagent`
+   * > built-in `asyncthink-delegate`. Non-claude adapters ignore.
+   */
+  subagent?: string;
 }
 
 export interface DelegateResponse {
@@ -258,6 +265,8 @@ export class Delegate {
         mcpServers: req.mcpServers,
         // v2.5.0 — threadId for codex $CODEX_HOME overlay scoping.
         threadId,
+        // v2.7.0 — per-call subagent override for claude subscription auth.
+        subagent: req.subagent,
       },
       this.executor
     );
@@ -350,6 +359,8 @@ export class Delegate {
       // Fields are now first-class on TaskExecutorRequest (v2.3.1 B1).
       mcpServers: req.mcpServers,
       preflight: req.preflight,
+      // v2.7.0 — per-call subagent override for claude subscription auth.
+      subagent: req.subagent,
     });
     return {
       taskId: state.taskId,

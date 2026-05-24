@@ -84,6 +84,13 @@ export interface DelegateRequest {
      * Emits a `task.bypass_rate_limit` audit event for observability.
      */
     bypassRateLimit?: boolean;
+    /**
+     * v2.7.0 — per-call subagent override for claude adapter subscription
+     * auth. Pins which Subagent persona spawns this delegate. Resolution
+     * precedence: this > skill `subagent:` > settings `defaults.subagent`
+     * > built-in `asyncthink-delegate`. Non-claude adapters ignore.
+     */
+    subagent?: string;
 }
 export interface DelegateResponse {
     threadId: string;
