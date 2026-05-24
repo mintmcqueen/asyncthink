@@ -10,6 +10,22 @@ All notable changes to AsyncThink are documented here. The format follows [Keep 
 - Set plugin and marketplace author to `mintmcqueen`.
 - GitHub default branch set to `develop` so plugin installs pull v2 code by default.
 
+## [2.7.1] — 2026-05-24
+
+Test-only patch: adds permanent regression guards for the v2.6/v2.7 subagent injection. No behavior change.
+
+### Added — integration coverage
+- `__tests__/integration/subagentPropagation.test.ts` (8 specs) — mirrors the v2.3.1 B1 `mcpServersPropagation.test.ts` pattern for the new `subagent` field. Asserts propagation through all four invocation paths (sync delegate, async delegate, sync council fork, async detached fork), plus skill-frontmatter resolution and caller-wins-over-skill precedence. Two additional specs exercise the claude adapter's argv-construction layer end-to-end: `--agents`/`--agent` are emitted on the subscription path when `inv.subagent` is set, and NOT emitted on the api path regardless of caller `subagent`.
+
+### Added — live coverage
+- `__tests__/live/subagentSpawn.live.test.ts` (1 live + 1 diagnostic) — gated on `RUN_LIVE=1 + claude binary on PATH + ANTHROPIC_API_KEY unset`. Materializes a synthetic subagent whose system prompt forces a marker phrase, spawns `claude --print` via the real `LocalSubprocessExecutor`, and asserts (a) the response contains the marker (proving `--agents`/`--agent` actually steered the system prompt) and (b) a `claude.subagent.spawn` audit event landed. Skip-reason diagnostic always runs so a silent skip is impossible.
+
+### Why this exists
+The v2.6 and v2.7 subagent-injection path had unit tests at the adapter layer and slash-command markdown for orchestration, but no test that exercised the wire end-to-end: tool layer → adapter → executor → live claude. v2.7.1 closes that gap permanently — every future change to the claude adapter's argv shape OR to the subagent propagation chain is caught by the integration suite, and the live test gives the strongest possible "yes it really works" signal when run before a release.
+
+### Test footprint
+- 352 total (was 342). 8 new integration specs + 1 new live spec + 1 diagnostic.
+
 ## [2.7.0] — 2026-05-24
 
 Discoverable configuration + four-reviewer code-review panel. Wraps the v2.6 `asyncthink_config` actions in a natural-language slash command, adds four built-in code-review subagents (each tuned for one axis), wires a per-call subagent override so a single asyncthink chain can spawn forks with DIFFERENT personas in parallel, and rebuilds `/asyncthink:review-pr` around the panel pattern.
