@@ -30,6 +30,7 @@ export const BUILTIN_DEFAULTS = {
     defaults: {
         adapter: 'claude',
         subagent: 'asyncthink-delegate',
+        injectSubagent: true,
     },
 };
 /**
@@ -131,10 +132,16 @@ export function validateKey(key, value) {
             }
             return { valid: true };
         }
+        case 'defaults.injectSubagent': {
+            if (typeof value !== 'boolean') {
+                return { valid: false, reason: 'defaults.injectSubagent must be a boolean' };
+            }
+            return { valid: true };
+        }
         default:
             return {
                 valid: false,
-                reason: `unknown setting key "${key}". Known keys: defaults.adapter, defaults.subagent.`,
+                reason: `unknown setting key "${key}". Known keys: defaults.adapter, defaults.subagent, defaults.injectSubagent.`,
             };
     }
 }

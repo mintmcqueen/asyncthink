@@ -10,6 +10,37 @@ All notable changes to AsyncThink are documented here. The format follows [Keep 
 - Set plugin and marketplace author to `mintmcqueen`.
 - GitHub default branch set to `develop` so plugin installs pull v2 code by default.
 
+## [2.8.0] — 2026-05-24
+
+Subagent injection pivot: removes the fragile auth-path-detection gate in favor of an explicit settings toggle. Empirically validated end-to-end on the api path via the live test suite.
+
+### Why
+v2.6/v2.7 gated claude-adapter subagent injection on `detectAuthPath('claude') === 'subscription'`. The heuristic broke for any user who had `ANTHROPIC_API_KEY` set as a fallback (but actually used subscription auth in the parent Claude Code session) — they silently got no injection. The 2026-05-24 playtest surfaced this: a delegate to claude with `subagent: 'security-review'` ran without the persona because the env-detected path was `api`, even though subscription auth was active in the parent session.
+
+The `--agents` flag works at the claude-CLI session-config layer, BEFORE the model call, so injection is identical across subscription / api / vertex / bedrock paths. The auth-path gate was solving a non-problem.
+
+### Added
+- **`defaults.injectSubagent: boolean`** — new whitelisted setting key. Built-in default: `true`. Set to `false` via `asyncthink_config({action: "set_setting", key: "defaults.injectSubagent", value: false})` to disable subagent injection globally (useful when a persona is hurting more than helping for a workflow).
+
+### Changed
+- **Claude adapter gate is now `defaults.injectSubagent !== false`** instead of `authPath === 'subscription'`. Subagent injection happens by default on EVERY claude spawn, regardless of auth path.
+- **`claude.subagent.spawn` audit event** still carries the detected `authPath` for diagnostic visibility ("this was injected on api path"), but `authPath` no longer gates the decision.
+- Updated `claudeAdapterSubagent.test.ts` and `subagentPropagation.test.ts`: the "skips on api path" specs flipped to "injects on api path" + new "skips when `injectSubagent=false`" toggle specs.
+- `subagentSpawn.live.test.ts` runs on EITHER auth path now (was: subscription only). Live-validated on api path with `ANTHROPIC_API_KEY` set — marker phrase appeared in response, audit event landed with `authPath: 'api'`.
+
+### Schema additions
+- `SettingsValues.defaults.injectSubagent?: boolean`.
+- `BUILTIN_DEFAULTS` gains `injectSubagent: true`.
+- `validateKey('defaults.injectSubagent', value)` requires `typeof value === 'boolean'`.
+
+### Migration
+- Fully additive for callers; default behavior is "always inject" which matches user intent post-v2.6/v2.7 anyway. API/Vertex/Bedrock users start seeing subagent injection where before they didn't — they can opt out via `set_setting defaults.injectSubagent false`.
+- Existing `defaults.subagent` setting (which subagent to use) is unchanged.
+
+### Tests
+- 357 total (was 353). 4 new: two integration specs (api-path-injects + injectSubagent-false-toggle) + two unit validateKey specs (boolean accept + non-boolean reject).
+- Live test now exercises api path and PASSES — empirical proof that v2.8's design assumption holds.
+
 ## [2.7.2] — 2026-05-24
 
 **Boot-blocker fix.** v2.4 dropped `dotenv` from `package.json` but left a side-effect import (`import 'dotenv/config';`) at line 11 of `src/index.ts`. The v2.4 cleanup grep matched `from 'dotenv'` and `dotenv.` but missed the side-effect form. Tests never imported `src/index.ts` so vitest passed; the MCP server crashed at boot with `ERR_MODULE_NOT_FOUND: Cannot find package 'dotenv'` on every Claude Code restart from v2.4 through v2.7.1. Discovered when post-restart MCP reconnect failed during the v2.7.1 playtest.
