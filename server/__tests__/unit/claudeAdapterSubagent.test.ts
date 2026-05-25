@@ -1,13 +1,18 @@
 /**
- * v2.6.0 — claude adapter subagent injection on subscription auth path.
+ * v2.6.0 (updated v2.8.0) — claude adapter subagent injection.
+ *
+ * v2.8.0 redesign: injection is now driven by `defaults.injectSubagent`
+ * (default `true`), NOT auth-path detection. The previous "subscription
+ * only" heuristic was fragile — users with `ANTHROPIC_API_KEY` set as a
+ * fallback silently got no injection. The new design: inject everywhere
+ * by default; users explicitly opt out via `set_setting injectSubagent=false`.
  *
  * Verifies:
- *   - On subscription auth (no API key in env), --agents + --agent flags
- *     are passed to claude --print, populated from the settings layer's
- *     defaults.subagent + the registry.
- *   - On api auth path (ANTHROPIC_API_KEY set), subagent injection is
- *     skipped — argv stays minimal.
- *   - claude.subagent.spawn audit event fires on subscription path.
+ *   - Injection happens with --agents + --agent flags regardless of auth
+ *     path, populated from settings.defaults.subagent + the registry.
+ *   - `defaults.injectSubagent=false` disables injection globally.
+ *   - claude.subagent.spawn audit event fires whenever injection happens,
+ *     with the detected authPath surfaced for diagnostic clarity.
  *   - If subagent registry can't find the id, spawn proceeds without
  *     subagent (failure-isolated).
  */
@@ -113,11 +118,43 @@ describe('ClaudeAdapter — subagent injection', () => {
     }
   });
 
-  it('skips subagent injection on api auth path (ANTHROPIC_API_KEY set)', async () => {
+  // v2.8.0 — injection now happens on api path too (was: skipped).
+  it('injects subagent on api auth path (ANTHROPIC_API_KEY set) — v2.8 design', async () => {
     const prevApiKey = process.env.ANTHROPIC_API_KEY;
     process.env.ANTHROPIC_API_KEY = 'sk-test';
     try {
       const { adapter, auditLog } = await buildAdapter();
+      const exec = new RecordingExecutor();
+      await adapter.invoke(
+        { prompt: 'test', intelligence: 'med' },
+        exec
+      );
+      expect(exec.lastArgv).toContain('--agents');
+      expect(exec.lastArgv).toContain('--agent');
+      expect(exec.lastArgv).toContain('asyncthink-delegate');
+      const spawnEvents = auditLog.events.filter(
+        (e) => e.kind === 'claude.subagent.spawn'
+      );
+      expect(spawnEvents).toHaveLength(1);
+      // The detected authPath is surfaced in the audit event for diagnostics,
+      // even though it no longer gates the decision.
+      expect(spawnEvents[0]).toMatchObject({
+        kind: 'claude.subagent.spawn',
+        authPath: 'api',
+      });
+    } finally {
+      if (prevApiKey !== undefined) process.env.ANTHROPIC_API_KEY = prevApiKey;
+      else delete process.env.ANTHROPIC_API_KEY;
+    }
+  });
+
+  // v2.8.0 — explicit opt-out via settings.
+  it('skips injection when defaults.injectSubagent=false (explicit opt-out)', async () => {
+    const prevApiKey = process.env.ANTHROPIC_API_KEY;
+    delete process.env.ANTHROPIC_API_KEY;
+    try {
+      const { adapter, settingsStore, auditLog } = await buildAdapter();
+      await settingsStore.set('defaults.injectSubagent', false, 'user');
       const exec = new RecordingExecutor();
       await adapter.invoke(
         { prompt: 'test', intelligence: 'med' },
@@ -128,7 +165,6 @@ describe('ClaudeAdapter — subagent injection', () => {
       expect(auditLog.events.filter((e) => e.kind === 'claude.subagent.spawn')).toHaveLength(0);
     } finally {
       if (prevApiKey !== undefined) process.env.ANTHROPIC_API_KEY = prevApiKey;
-      else delete process.env.ANTHROPIC_API_KEY;
     }
   });
 

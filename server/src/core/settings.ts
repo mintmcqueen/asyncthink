@@ -25,8 +25,28 @@ export interface SettingsValues {
   defaults?: {
     /** Adapter to use when caller omits `adapter` and skill doesn't pin one. */
     adapter?: AdapterId;
-    /** Subagent id to bind to claude adapter spawns on subscription auth path. */
+    /**
+     * Subagent id to bind to claude adapter spawns. v2.6-v2.7 gated this on
+     * subscription auth only; v2.8.0 lifted that gate — see `injectSubagent`.
+     */
     subagent?: string;
+    /**
+     * v2.8.0 — explicit toggle for claude-adapter subagent injection.
+     *
+     * Previously the adapter inferred "should I inject?" from
+     * `detectAuthPath('claude') === 'subscription'`. That heuristic was
+     * fragile: users with `ANTHROPIC_API_KEY` set as a fallback (but
+     * actually using subscription auth) silently got NO injection, and
+     * vice versa.
+     *
+     * v2.8.0 makes it explicit. Default: `true` — every claude spawn
+     * gets the configured subagent, regardless of auth path. Set to
+     * `false` to disable globally (e.g. when the agent persona is hurting
+     * more than helping for your workflow). The `--agents` claude-CLI flag
+     * applies at the session-config layer pre-model-call, so injection
+     * works identically across subscription / api / vertex / bedrock paths.
+     */
+    injectSubagent?: boolean;
   };
 }
 
@@ -79,6 +99,7 @@ export const BUILTIN_DEFAULTS: SettingsValues = {
   defaults: {
     adapter: 'claude',
     subagent: 'asyncthink-delegate',
+    injectSubagent: true,
   },
 };
 
@@ -190,10 +211,16 @@ export function validateKey(
       }
       return { valid: true };
     }
+    case 'defaults.injectSubagent': {
+      if (typeof value !== 'boolean') {
+        return { valid: false, reason: 'defaults.injectSubagent must be a boolean' };
+      }
+      return { valid: true };
+    }
     default:
       return {
         valid: false,
-        reason: `unknown setting key "${key}". Known keys: defaults.adapter, defaults.subagent.`,
+        reason: `unknown setting key "${key}". Known keys: defaults.adapter, defaults.subagent, defaults.injectSubagent.`,
       };
   }
 }

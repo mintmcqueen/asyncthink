@@ -53,23 +53,44 @@ export class ClaudeAdapter {
         const resolved = resolveModel(inv, this.tiers, this.defaultTier, { adapterId: this.id });
         const prompt = renderPrompt(inv);
         const argv = ['--print', '--model', resolved.model, prompt];
-        // v2.6.0 — on the subscription auth path, spawn `claude --print` with a
-        // dedicated AsyncThink subagent so the delegate runs as a separate
-        // persona from the user's Claude Code session (focused system prompt,
-        // narrowed tool set). On non-subscription paths (api / vertex / bedrock)
-        // the subagent injection is skipped — those routes already isolate via
-        // their own credential boundary.
+        // v2.8.0 — spawn `claude --print` with a dedicated AsyncThink subagent
+        // whenever a subagent resolves, regardless of auth path. The
+        // `--agents` claude-CLI flag applies at the session-config layer
+        // pre-model-call, so injection works identically across subscription /
+        // api / vertex / bedrock paths.
         //
-        // v2.7.0 — precedence for subagent resolution:
+        // Gate: `defaults.injectSubagent !== false` (explicit user opt-out).
+        // Lifted from v2.6-v2.7's auth-path heuristic (`detectAuthPath === 'subscription'`)
+        // because the heuristic was fragile — users with `ANTHROPIC_API_KEY`
+        // set as a fallback (but actually using subscription auth) silently
+        // got NO injection, and vice versa.
+        //
+        // Precedence for subagent id (unchanged from v2.7):
         //   1. inv.subagent (caller-supplied; per-fork override)
         //   2. settings effective defaults.subagent (user/project layer)
         //   3. builtin "asyncthink-delegate" (BUILTIN_DEFAULTS in settings.ts)
         // Skill frontmatter `subagent:` resolves into inv.subagent at the
         // tool-handler layer (delegate.tool / asyncthink.tool), so it shows up
         // here as a caller-supplied value with the right precedence.
+        //
+        // The detected authPath is still emitted in the audit event for
+        // diagnostic visibility ("this was injected on api path") even though
+        // it no longer gates the decision.
         const authPath = detectAuthPath('claude');
         let subagent;
-        if (authPath === 'subscription' && this.subagentRegistry) {
+        let injectSubagent = true; // v2.8.0 default; settings can disable.
+        if (this.settingsStore) {
+            try {
+                const settings = await this.settingsStore.get();
+                if (settings.effective?.defaults?.injectSubagent === false) {
+                    injectSubagent = false;
+                }
+            }
+            catch {
+                // Settings failure → fall through with default (inject=true).
+            }
+        }
+        if (injectSubagent && this.subagentRegistry) {
             let subagentId = inv.subagent;
             if (!subagentId && this.settingsStore) {
                 try {

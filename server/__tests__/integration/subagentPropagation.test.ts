@@ -259,7 +259,8 @@ describe('v2.7.0 — claude adapter builds --agents/--agent argv when inv.subage
     }
   });
 
-  it('emits no --agents on api auth path (ANTHROPIC_API_KEY set) regardless of inv.subagent', async () => {
+  // v2.8.0 — injection now happens on api path too (was: skipped).
+  it('emits --agents on api auth path (ANTHROPIC_API_KEY set) — v2.8 design', async () => {
     const prevApiKey = process.env.ANTHROPIC_API_KEY;
     process.env.ANTHROPIC_API_KEY = 'sk-test-fake';
     try {
@@ -275,13 +276,39 @@ describe('v2.7.0 — claude adapter builds --agents/--agent argv when inv.subage
         { prompt: 'test', subagent: 'asyncthink-delegate' },
         exec
       );
-      // API path skips subagent injection by design — caller specified one,
-      // but the adapter respects the auth-path gate.
+      // v2.8.0: api path now ALSO injects. The --agents flag works pre-model
+      // at the CLI session-config layer regardless of auth route.
+      expect(exec.lastArgv).toContain('--agents');
+      expect(exec.lastArgv).toContain('--agent');
+      expect(exec.lastArgv).toContain('asyncthink-delegate');
+    } finally {
+      if (prevApiKey !== undefined) process.env.ANTHROPIC_API_KEY = prevApiKey;
+      else delete process.env.ANTHROPIC_API_KEY;
+    }
+  });
+
+  // v2.8.0 — explicit opt-out: `defaults.injectSubagent=false` disables.
+  it('emits no --agents when defaults.injectSubagent=false', async () => {
+    const prevApiKey = process.env.ANTHROPIC_API_KEY;
+    delete process.env.ANTHROPIC_API_KEY;
+    try {
+      const subagentRegistry = new FsSubagentRegistry({ storageDir: tmpSubagents });
+      await subagentRegistry.bootstrapBuiltins([DEFAULT_ASYNCTHINK_DELEGATE]);
+      const settingsStore = new FsSettingsStore({
+        userSettingsPath: tmpSettings,
+        cwd: tmpRoot,
+      });
+      await settingsStore.set('defaults.injectSubagent', false, 'user');
+      const claude = new ClaudeAdapter({ subagentRegistry, settingsStore });
+      const exec = new RecordingExecutor();
+      await claude.invoke(
+        { prompt: 'test', subagent: 'asyncthink-delegate' },
+        exec
+      );
       expect(exec.lastArgv).not.toContain('--agents');
       expect(exec.lastArgv).not.toContain('--agent');
     } finally {
       if (prevApiKey !== undefined) process.env.ANTHROPIC_API_KEY = prevApiKey;
-      else delete process.env.ANTHROPIC_API_KEY;
     }
   });
 });

@@ -103,6 +103,15 @@ describe('validateKey', () => {
   it('rejects empty subagent id', () => {
     expect(validateKey('defaults.subagent', '').valid).toBe(false);
   });
+  // v2.8.0
+  it('accepts injectSubagent boolean', () => {
+    expect(validateKey('defaults.injectSubagent', true)).toEqual({ valid: true });
+    expect(validateKey('defaults.injectSubagent', false)).toEqual({ valid: true });
+  });
+  it('rejects non-boolean injectSubagent', () => {
+    expect(validateKey('defaults.injectSubagent', 'true').valid).toBe(false);
+    expect(validateKey('defaults.injectSubagent', 1).valid).toBe(false);
+  });
   it('rejects unknown key', () => {
     const r = validateKey('defaults.unknown', 'x');
     expect(r.valid).toBe(false);
@@ -115,6 +124,8 @@ describe('FsSettingsStore — get/set/unset', () => {
     const s = await store.get();
     expect(s.effective.defaults?.adapter).toBe('claude');
     expect(s.effective.defaults?.subagent).toBe('asyncthink-delegate');
+    // v2.8.0 — injectSubagent default true.
+    expect(s.effective.defaults?.injectSubagent).toBe(true);
   });
 
   it('user file overrides built-in', async () => {

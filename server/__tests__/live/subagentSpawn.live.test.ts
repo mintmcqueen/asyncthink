@@ -56,8 +56,10 @@ const claudeAvailable = (() => {
     return false;
   }
 })();
-const subscriptionAuth = !process.env.ANTHROPIC_API_KEY;
-const shouldRun = live && claudeAvailable && subscriptionAuth;
+// v2.8.0 — subagent injection now works on both subscription AND api paths
+// (the previous auth-path gate was lifted). Test runs whenever claude is
+// available — no auth-path filter.
+const shouldRun = live && claudeAvailable;
 
 class RecordingAuditLog implements AuditLog {
   public events: AuditEvent[] = [];
@@ -85,7 +87,7 @@ afterEach(async () => {
   }
 });
 
-describe.skipIf(!shouldRun)('live: claude subagent spawn (subscription path)', () => {
+describe.skipIf(!shouldRun)('live: claude subagent spawn (any auth path — v2.8)', () => {
   it('claude --print --agents <synthetic> --agent <id> produces marker phrase', async () => {
     const subagentRegistry = new FsSubagentRegistry({ storageDir });
     const created = await subagentRegistry.create(SYNTHETIC_SUBAGENT);
@@ -121,10 +123,17 @@ describe.skipIf(!shouldRun)('live: claude subagent spawn (subscription path)', (
     expect(spawnEvents[0]).toMatchObject({
       kind: 'claude.subagent.spawn',
       subagentId: created.id,
-      authPath: 'subscription',
     });
+    // v2.8.0 — authPath is whatever env reports; test runs on both paths.
+    // Assert it's one of the known values; the actual path is informational.
+    const ev = spawnEvents[0] as { authPath: string };
+    expect(['subscription', 'api', 'vertex', 'bedrock']).toContain(ev.authPath);
   }, 180_000);
 });
+
+// Header rename: v2.6 framed this as "subscription path"; v2.8 lifted that
+// gate, so the live test now exercises whichever path the env reports.
+// Keep this describe block name short and accurate for grep.
 
 // Document why a run was skipped so a no-op test isn't silently green.
 describe('live: claude subagent spawn — skip-reason diagnostics', () => {
@@ -132,14 +141,14 @@ describe('live: claude subagent spawn — skip-reason diagnostics', () => {
     const skipReasons: string[] = [];
     if (!live) skipReasons.push('RUN_LIVE!=1');
     if (!claudeAvailable) skipReasons.push('claude binary not on PATH');
-    if (!subscriptionAuth) skipReasons.push('ANTHROPIC_API_KEY set (api path, not subscription)');
+    const authPathNote = process.env.ANTHROPIC_API_KEY ? 'api' : 'subscription';
     if (skipReasons.length > 0) {
       console.error(
         `[subagentSpawn.live] SKIPPED — reasons: ${skipReasons.join('; ')}. ` +
-          `To enable: RUN_LIVE=1 + claude on PATH + unset ANTHROPIC_API_KEY.`
+          `To enable: RUN_LIVE=1 + claude on PATH.`
       );
     } else {
-      console.error('[subagentSpawn.live] RAN — all gates passed.');
+      console.error(`[subagentSpawn.live] RAN on authPath=${authPathNote} — all gates passed.`);
     }
     // The assertion below always holds; this test exists only to surface
     // the diagnostic line so a skip isn't silent.
