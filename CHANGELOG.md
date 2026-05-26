@@ -10,6 +10,36 @@ All notable changes to AsyncThink are documented here. The format follows [Keep 
 - Set plugin and marketplace author to `mintmcqueen`.
 - GitHub default branch set to `develop` so plugin installs pull v2 code by default.
 
+## [2.8.1] — 2026-05-25
+
+**Path-traversal fix in subagent registry.** Caught by AsyncThink's own `security-review` panel reviewer (the v2.7 built-in subagent) when run against the v2.8.0 diff via `/asyncthink:review-pr`. The persona caught exactly the kind of bug it's designed to catch — strong validation of both the subagent system and the v2.8.0 injection design that made the panel work on api path.
+
+### Fixed (security)
+- **`FsSubagentRegistry` validates subagent id format at every filesystem entry point.** Previously, `subagent_get('../../../etc/passwd')` would have `path.join` normalize the traversal and `readFile` an arbitrary JSON file on disk. If the file contained valid `{id, name, ...}` JSON, it became a live `Subagent` injected into the `--agents` flag passed to `claude --print`.
+- New `isValidSubagentId(id)` helper in `core/subagent.ts`: id is valid iff `slugifyName(id) === id` AND `1 ≤ length ≤ 64`. Same semantics as the CREATE-time validation; now enforced at READ time too.
+- Validation centralized in `FsSubagentRegistry.pathFor()` — every method that builds a filesystem path (get, update, delete, write) is gated. Invalid ids cause `get()` to return `undefined`, `delete()` to return `{deleted: false}`, and `pathFor()` (called from `write`) to throw `SubagentIdInvalidError`.
+
+### Impact scope (single-tenant local, but real)
+- v2.6/v2.7/v2.8.0 are vulnerable. Any caller able to pass `inv.subagent` (i.e. any orchestrator LLM, any skill, any directly-invoked tool call) could trigger arbitrary JSON file reads with the MCP server process's privileges.
+- Attack requires: (a) the attacker controls or influences `inv.subagent`, AND (b) the targeted JSON file is parseable + has `id`+`name` keys. The latter is rare but not impossible (e.g. lockfiles, package.json with the right shape).
+- v2.8.1 closes both legs by validating before any filesystem operation.
+
+### Added — regression tests
+- 30 new specs in `__tests__/unit/subagentRegistry.test.ts`:
+  - Path-traversal attempts (`../../../etc/passwd`, `/etc/passwd`, leading-dash, uppercase) return `undefined` from `get()`.
+  - Delete with traversal id is a `{deleted: false}` no-op.
+  - End-to-end attack scenario: malicious `attack-payload.json` placed outside `storageDir`, `get('../attack-payload')` confirms it cannot be reached.
+  - 24 parameterized `isValidSubagentId()` cases covering the slugify regex shape (accepts/rejects with full coverage of edge inputs).
+- Total: 377 (was 357).
+
+### Story
+v2.7.0 shipped a 4-reviewer code-review panel (`security-review`, `simplify-review`, `test-coverage-review`, `correctness-review`). v2.8.0 fixed the auth-path gate so the panel actually fires regardless of `ANTHROPIC_API_KEY` state. When we ran `/asyncthink:review-pr` against the v2.8.0 diff itself, `security-review` caught the path-traversal bug — proving:
+1. The panel works end-to-end.
+2. The persona prompts produce the structured output they're designed to (numbered findings, file:line, concrete attack, severity).
+3. AsyncThink's own tooling can catch real bugs in AsyncThink.
+
+The audit chain: `claude.subagent.spawn` events for `security-review` are visible in `~/.local/share/asyncthink/audit.jsonl` from the panel run that surfaced this.
+
 ## [2.8.0] — 2026-05-24
 
 Subagent injection pivot: removes the fragile auth-path-detection gate in favor of an explicit settings toggle. Empirically validated end-to-end on the api path via the live test suite.

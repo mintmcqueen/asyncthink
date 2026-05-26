@@ -36,8 +36,25 @@ export declare class FsSubagentRegistry implements SubagentRegistry {
      */
     markUsed(id: string): Promise<void>;
     bootstrapBuiltins(builtins: BuiltinSubagent[]): Promise<void>;
+    /**
+     * v2.8.1 — gate every filesystem path construction on the id-validity
+     * check. This is defense-in-depth: even if a caller forgets to validate
+     * before reaching this method, traversal sequences (`../`, absolute
+     * paths, dotfiles, etc.) are rejected at the source.
+     *
+     * Throws `SubagentIdInvalidError` rather than returning undefined,
+     * because reaching pathFor() means a caller intended a real filesystem
+     * operation; returning undefined would hide bugs.
+     */
     private pathFor;
     private write;
+}
+/**
+ * v2.8.1 — thrown when a method is called with an id that doesn't match
+ * the slugified form. Surfaces caller bugs instead of silently no-op'ing.
+ */
+export declare class SubagentIdInvalidError extends Error {
+    constructor(id: string);
 }
 declare function defaultStorageDir(): string;
 export declare const __testing: {
