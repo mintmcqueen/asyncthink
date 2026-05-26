@@ -2,9 +2,10 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { promises as fsp } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { Council, type AdapterLookup, type ForkRequest } from '../../src/asyncthink/council.js';
+import { Council, type ForkRequest } from '../../src/asyncthink/council.js';
 import { JsonlThreadStore } from '../../src/stores/jsonlThreadStore.js';
 import { FsTaskStore } from '../../src/stores/fsTaskStore.js';
+import { LocalInProcessTaskExecutor } from '../../src/exec/localInProcessTaskExecutor.js';
 import type {
   Adapter,
   AdapterInvocation,
@@ -51,19 +52,32 @@ afterEach(async () => {
   }
 });
 
+/**
+ * v2.9.0 — Council now takes (taskExecutor, taskStore). The TaskExecutor is
+ * wired with the same FakeAdapter so the test still controls adapter behavior;
+ * it just flows through `taskExecutor.start` instead of Council calling
+ * adapter.invoke directly.
+ */
 function build(adapters: Adapter[]): {
   council: Council;
   threadStore: JsonlThreadStore;
   taskStore: FsTaskStore;
+  taskExecutor: LocalInProcessTaskExecutor;
 } {
   const threadStore = new JsonlThreadStore({ rootDir: tmpThreads });
   const taskStore = new FsTaskStore({ rootDir: tmpTasks });
-  const lookup: AdapterLookup = {
-    get: (id) => adapters.find((a) => a.id === id),
+  const lookup = {
+    get: (id: string) => adapters.find((a) => a.id === id),
     list: () => adapters,
   };
-  const council = new Council(lookup, threadStore, taskStore, noopExec);
-  return { council, threadStore, taskStore };
+  const taskExecutor = new LocalInProcessTaskExecutor({
+    adapters: lookup,
+    executor: noopExec,
+    taskStore,
+    threadStore,
+  });
+  const council = new Council(taskExecutor, taskStore);
+  return { council, threadStore, taskStore, taskExecutor };
 }
 
 const baseFork = (overrides: Partial<ForkRequest> = {}): ForkRequest => ({
@@ -75,18 +89,49 @@ const baseFork = (overrides: Partial<ForkRequest> = {}): ForkRequest => ({
   ...overrides,
 });
 
+// v2.9.0 — regression spec for the new ceiling-vs-timeout semantics.
+// Old (v2.8.x and prior): hard 180s shared timeout cut off healthy forks.
+// New: per-fork `taskExecutor.result()` waits as long as needed; only the
+// chain-end safety ceiling caps the total. Verify a 500ms "long" fork
+// completes when the ceiling is much larger than 180ms (which would have
+// cut it off under the old design).
+describe('Council — v2.9 chain-end uses per-fork waits, not shared timeout', () => {
+  it('completes a fork that takes longer than the OLD 180ms hardcode', async () => {
+    const slow = new FakeAdapter('a', async () => {
+      await new Promise((r) => setTimeout(r, 500));
+      return okResult('completed-past-old-timeout');
+    });
+    const { council } = build([slow]);
+    const chainId = 'chain-x';
+    await council.fork({
+      id: 'f1',
+      adapter: 'a',
+      prompt: 'p',
+      parentThreadId: chainId,
+      thoughtNumber: 1,
+    });
+    // Use a 5s ceiling — well above 500ms. Old code with a 180ms
+    // shared race would have failed this with the fork stuck at running.
+    const results = await council.endChain(chainId, 5_000);
+    expect(results).toHaveLength(1);
+    expect(results[0].status).toBe('complete');
+    expect(results[0].output).toContain('completed-past-old-timeout');
+  });
+});
+
 describe('Council', () => {
   it('fork registers the task and returns immediately', async () => {
     const a = new FakeAdapter('a', async () => slowResult('done'));
-    const { council, taskStore } = build([a]);
+    const { council } = build([a]);
     const start = Date.now();
     await council.fork(baseFork());
     // "Immediately" means much less than the fork's internal 80ms delay
-    // (slowResult). 250ms ceiling tolerates loaded-machine scheduling jitter
-    // (was 50ms; tripped on heavily concurrent test runs).
+    // (slowResult). 250ms ceiling tolerates loaded-machine scheduling jitter.
     expect(Date.now() - start).toBeLessThan(250);
-    const task = await taskStore.get('chain-x::f1');
-    expect(task?.status).toBe('running');
+    // v2.9.0: Council writes via TaskExecutor; status is the v2.2 'working'
+    // (or 'running' if it transitioned by now). Both are "still in-flight".
+    const status = await council.chainStatus('chain-x');
+    expect(status.pending).toContain('f1');
   });
 
   it('chainStatus shows pending forks while in flight', async () => {

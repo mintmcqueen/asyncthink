@@ -14,7 +14,25 @@ import { getCouncil, getThinking, getSkillRegistry, getManifestRegistry, getAudi
 import { sweepIdleOnce } from '../delegate/sweeper.js';
 import { resolveSkill } from '../skills/resolver.js';
 import { getSettingsStore } from '../app.js';
-const DEFAULT_FORK_TIMEOUT_MS = 180_000;
+import { DEFAULT_CHAIN_END_CEILING_MS } from '../asyncthink/council.js';
+/**
+ * v2.9.0 — chain-end + waitFor safety ceiling sourced from settings, not
+ * a tight 180s hardcode. The previous default cut off healthy long-running
+ * claude-haiku panels (~200-400s per fork). Per-adapter defaultTimeoutMs
+ * bounds individual forks; this is the absolute outer bound.
+ */
+async function chainEndCeilingMs() {
+    try {
+        const s = await getSettingsStore().get();
+        const v = s.effective?.defaults?.chainEndTimeoutMs;
+        if (typeof v === 'number' && v >= 60_000)
+            return v;
+    }
+    catch {
+        /* fall through to built-in default */
+    }
+    return DEFAULT_CHAIN_END_CEILING_MS;
+}
 let activeChainId = null;
 const ASYNCTHINK_DESCRIPTION = `Sequential thinking with optional parallel forks to subordinate model CLIs (claude, gemini, codex).
 
@@ -233,14 +251,14 @@ export function registerAsyncThinkTool(server) {
                 }
             }
         }
-        // 4. waitFor.
+        // 4. waitFor — uses the configurable safety ceiling (v2.9.0).
         if (args.waitFor?.length) {
-            await council.waitFor(args.waitFor, chainId, DEFAULT_FORK_TIMEOUT_MS);
+            await council.waitFor(args.waitFor, chainId, await chainEndCeilingMs());
         }
         // 5. End chain on final thought.
         let endResults;
         if (!args.nextThoughtNeeded) {
-            endResults = await council.endChain(chainId, DEFAULT_FORK_TIMEOUT_MS);
+            endResults = await council.endChain(chainId, await chainEndCeilingMs());
             activeChainId = null;
         }
         // 6. Collect results requested by the caller.

@@ -45,6 +45,18 @@ export interface SettingsValues {
          * works identically across subscription / api / vertex / bedrock paths.
          */
         injectSubagent?: boolean;
+        /**
+         * v2.9.0 — safety ceiling for `Council.endChain` and `Council.waitFor`.
+         * NOT the expected wait — per-adapter `defaultTimeoutMs` (claude 300s,
+         * codex 180s, gemini 180s) bounds individual forks. This is the
+         * absolute outer bound on how long Council will block before
+         * returning whatever results are available.
+         *
+         * Replaces the previous hard-coded `DEFAULT_FORK_TIMEOUT_MS = 180_000`
+         * that cut off healthy long-running claude-haiku panels. Default:
+         * 900_000ms (15 min). Range: enforced ≥60_000 in `validateKey`.
+         */
+        chainEndTimeoutMs?: number;
     };
 }
 /**

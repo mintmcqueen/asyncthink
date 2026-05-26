@@ -16,6 +16,7 @@ import { Council, type AdapterLookup } from '../../src/asyncthink/council.js';
 import { AsyncThinkingServer } from '../../src/asyncthink/thinking.js';
 import { JsonlThreadStore } from '../../src/stores/jsonlThreadStore.js';
 import { FsTaskStore } from '../../src/stores/fsTaskStore.js';
+import { LocalInProcessTaskExecutor } from '../../src/exec/localInProcessTaskExecutor.js';
 import type {
   Adapter,
   AdapterInvocation,
@@ -70,7 +71,13 @@ describe('asyncthink chain lifecycle', () => {
     };
     const threadStore = new JsonlThreadStore({ rootDir: tmpThreads });
     const taskStore = new FsTaskStore({ rootDir: tmpTasks });
-    const council = new Council(lookup, threadStore, taskStore, noopExec);
+    const taskExecutor = new LocalInProcessTaskExecutor({
+      adapters: lookup,
+      executor: noopExec,
+      taskStore,
+      threadStore,
+    });
+    const council = new Council(taskExecutor, taskStore);
     const thinking = new AsyncThinkingServer();
 
     const chainId = council.newChain();
@@ -152,12 +159,15 @@ describe('asyncthink chain lifecycle', () => {
       get: () => broken,
       list: () => [broken],
     };
-    const council = new Council(
-      lookup,
-      new JsonlThreadStore({ rootDir: tmpThreads }),
-      new FsTaskStore({ rootDir: tmpTasks }),
-      noopExec
-    );
+    const threadStore = new JsonlThreadStore({ rootDir: tmpThreads });
+    const taskStore = new FsTaskStore({ rootDir: tmpTasks });
+    const taskExecutor = new LocalInProcessTaskExecutor({
+      adapters: lookup,
+      executor: noopExec,
+      taskStore,
+      threadStore,
+    });
+    const council = new Council(taskExecutor, taskStore);
     const chainId = council.newChain();
     await council.fork({
       id: 'doomed',
@@ -184,12 +194,15 @@ describe('asyncthink chain lifecycle', () => {
       get: () => slow,
       list: () => [slow],
     };
-    const council = new Council(
-      lookup,
-      new JsonlThreadStore({ rootDir: tmpThreads }),
-      new FsTaskStore({ rootDir: tmpTasks }),
-      noopExec
-    );
+    const threadStore = new JsonlThreadStore({ rootDir: tmpThreads });
+    const taskStore = new FsTaskStore({ rootDir: tmpTasks });
+    const taskExecutor = new LocalInProcessTaskExecutor({
+      adapters: lookup,
+      executor: noopExec,
+      taskStore,
+      threadStore,
+    });
+    const council = new Council(taskExecutor, taskStore);
     const chainId = council.newChain();
     await council.fork({
       id: 'slowpoke',

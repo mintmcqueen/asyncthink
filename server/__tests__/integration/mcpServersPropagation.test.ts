@@ -81,7 +81,8 @@ function buildStack() {
     threadStore,
   });
   const delegate = new Delegate(lookup, threadStore, noopExec, undefined, taskExecutor);
-  const council = new Council(lookup, threadStore, taskStore, noopExec);
+  // v2.9.0 — Council now takes (taskExecutor, taskStore).
+  const council = new Council(taskExecutor, taskStore);
   return { adapter, lookup, taskExecutor, delegate, council };
 }
 
