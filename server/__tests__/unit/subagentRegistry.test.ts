@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { promises as fsp, existsSync, readFileSync } from 'node:fs';
+import { promises as fsp, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -204,5 +204,114 @@ describe('FsSubagentRegistry — bootstrapBuiltins', () => {
         expect(forbidden.has(t)).toBe(false);
       }
     }
+  });
+});
+
+/**
+ * v2.8.1 — path-traversal regression. Caught by the security-review
+ * subagent panel run on 2026-05-25 against the v2.8.0 diff. Without
+ * isValidSubagentId() at the pathFor() entry point, `inv.subagent =
+ * "../../../etc/passwd"` would be normalized by path.join and read
+ * arbitrary JSON files. The defense rejects any id that doesn't match
+ * slugifyName output.
+ */
+describe('FsSubagentRegistry — v2.8.1 path-traversal defense', () => {
+  it('get(traversal-id) returns undefined, does NOT touch filesystem outside storageDir', async () => {
+    const r = new FsSubagentRegistry({ storageDir });
+    // Seed a legitimate subagent alongside an attacker target on disk.
+    await r.create({ name: 'Real', description: 'd', prompt: 'p' });
+    const attackTarget = join(storageDir, '..', 'attack-payload.json');
+    writeFileSync(
+      attackTarget,
+      JSON.stringify({ id: 'pwned', name: 'pwned', description: 'd', prompt: 'p', schemaVersion: 1 })
+    );
+    try {
+      // Attack: caller passes "../attack-payload" as the subagent id.
+      // path.join would normalize this to attack-payload.json above storageDir.
+      const result = await r.get('../attack-payload');
+      expect(result).toBeUndefined();
+    } finally {
+      // Cleanup the attack-payload outside the test's beforeEach-scoped storageDir.
+      try {
+        await fsp.unlink(attackTarget);
+      } catch {
+        /* may already be gone */
+      }
+    }
+  });
+
+  it('get with absolute path returns undefined', async () => {
+    const r = new FsSubagentRegistry({ storageDir });
+    expect(await r.get('/etc/passwd')).toBeUndefined();
+  });
+
+  it('get with leading-dash id returns undefined', async () => {
+    const r = new FsSubagentRegistry({ storageDir });
+    expect(await r.get('-malformed')).toBeUndefined();
+  });
+
+  it('get with uppercase id returns undefined (slugifyName lowercases)', async () => {
+    const r = new FsSubagentRegistry({ storageDir });
+    // Even if a "SECURITY-REVIEW.json" file existed (e.g. case-insensitive FS
+    // on macOS), passing the uppercase id is rejected because slugifyName
+    // would lowercase it.
+    expect(await r.get('SECURITY-REVIEW')).toBeUndefined();
+  });
+
+  it('delete with traversal id is a no-op (returns deleted:false)', async () => {
+    const r = new FsSubagentRegistry({ storageDir });
+    expect(await r.delete('../../etc/passwd')).toEqual({ deleted: false });
+  });
+
+  it('delete with valid id still works (path-traversal defense doesn\'t break normal use)', async () => {
+    const r = new FsSubagentRegistry({ storageDir });
+    const sa = await r.create({ name: 'Real', description: 'd', prompt: 'p' });
+    expect(await r.delete(sa.id)).toEqual({ deleted: true });
+  });
+
+  it('valid ids continue to work (delegate, security-review, etc.)', async () => {
+    const r = new FsSubagentRegistry({ storageDir });
+    await r.bootstrapBuiltins([DEFAULT_ASYNCTHINK_DELEGATE]);
+    expect(await r.get('asyncthink-delegate')).toBeTruthy();
+  });
+});
+
+/**
+ * v2.8.1 — pure unit tests for isValidSubagentId.
+ */
+import { isValidSubagentId } from '../../src/core/subagent.js';
+
+describe('isValidSubagentId', () => {
+  it.each([
+    ['asyncthink-delegate', true],
+    ['security-review', true],
+    ['a', true],
+    ['a1', true],
+    ['my-code-reviewer', true],
+    ['a-b-c-d-e', true],
+    [`${'a'.repeat(64)}`, true],
+  ])('accepts %p → %p', (id, expected) => {
+    expect(isValidSubagentId(id as string)).toBe(expected);
+  });
+
+  it.each([
+    ['', false], // empty
+    [`${'a'.repeat(65)}`, false], // too long
+    ['-leading', false],
+    ['trailing-', false],
+    ['UPPERCASE', false],
+    ['has space', false],
+    ['../../../etc/passwd', false],
+    ['/etc/passwd', false],
+    ['.', false],
+    ['..', false],
+    ['my..name', false],
+    ['my--name', false], // slugify collapses runs; double-dash is rejected
+    ['with.dot', false],
+    ['with_underscore', false], // slugifyName uses dashes, not underscores
+    ['with/slash', false],
+    ['with\\backslash', false],
+  ])('rejects %p → %p', (id, expected) => {
+    expect(isValidSubagentId(id as string)).toBe(expected);
   });
 });

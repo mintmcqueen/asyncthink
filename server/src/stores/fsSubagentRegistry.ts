@@ -22,7 +22,7 @@ import type {
   SubagentRegistry,
   SubagentUpdateInput,
 } from '../core/subagent.js';
-import { SUBAGENT_SCHEMA_VERSION, slugifyName } from '../core/subagent.js';
+import { SUBAGENT_SCHEMA_VERSION, isValidSubagentId, slugifyName } from '../core/subagent.js';
 
 export interface FsSubagentRegistryOptions {
   /** Override storage dir (for tests). Defaults to ~/.local/share/asyncthink/subagents. */
@@ -58,6 +58,12 @@ export class FsSubagentRegistry implements SubagentRegistry {
   }
 
   async get(id: string): Promise<Subagent | undefined> {
+    // v2.8.1 — defense against path traversal via caller-supplied subagent id.
+    // Without this guard, `inv.subagent = "../../../etc/passwd"` would be
+    // normalized by path.join inside pathFor() and read an arbitrary JSON
+    // file. The id must match slugifyName output (1-64 chars, lowercase
+    // alphanumerics + non-edge dashes).
+    if (!isValidSubagentId(id)) return undefined;
     const path = this.pathFor(id);
     if (!existsSync(path)) return undefined;
     try {
@@ -115,6 +121,9 @@ export class FsSubagentRegistry implements SubagentRegistry {
   }
 
   async delete(id: string): Promise<{ deleted: boolean }> {
+    // v2.8.1 — invalid ids return `deleted: false` rather than throwing.
+    // Symmetric with get(); a delete of a non-id is just a no-op.
+    if (!isValidSubagentId(id)) return { deleted: false };
     const path = this.pathFor(id);
     if (!existsSync(path)) return { deleted: false };
     await fsp.unlink(path);
@@ -153,7 +162,20 @@ export class FsSubagentRegistry implements SubagentRegistry {
     }
   }
 
+  /**
+   * v2.8.1 — gate every filesystem path construction on the id-validity
+   * check. This is defense-in-depth: even if a caller forgets to validate
+   * before reaching this method, traversal sequences (`../`, absolute
+   * paths, dotfiles, etc.) are rejected at the source.
+   *
+   * Throws `SubagentIdInvalidError` rather than returning undefined,
+   * because reaching pathFor() means a caller intended a real filesystem
+   * operation; returning undefined would hide bugs.
+   */
   private pathFor(id: string): string {
+    if (!isValidSubagentId(id)) {
+      throw new SubagentIdInvalidError(id);
+    }
     return join(this.storageDir, `${id}.json`);
   }
 
@@ -163,6 +185,20 @@ export class FsSubagentRegistry implements SubagentRegistry {
     const tmp = `${path}.tmp.${process.pid}.${Date.now()}`;
     await fsp.writeFile(tmp, JSON.stringify(subagent, null, 2));
     await fsp.rename(tmp, path);
+  }
+}
+
+/**
+ * v2.8.1 — thrown when a method is called with an id that doesn't match
+ * the slugified form. Surfaces caller bugs instead of silently no-op'ing.
+ */
+export class SubagentIdInvalidError extends Error {
+  constructor(id: string) {
+    super(
+      `subagent id "${id}" is invalid. Valid ids match slugifyName output: ` +
+        `1-64 chars, lowercase alphanumerics, dashes allowed except at edges.`
+    );
+    this.name = 'SubagentIdInvalidError';
   }
 }
 

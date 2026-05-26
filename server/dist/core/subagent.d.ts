@@ -124,6 +124,18 @@ export declare const BUILTIN_SUBAGENTS: BuiltinSubagent[];
 /** Ids of the four code-review panel subagents — spawned together by /asyncthink:review-pr. */
 export declare const CODE_REVIEW_PANEL_IDS: readonly ["security-review", "simplify-review", "test-coverage-review", "correctness-review"];
 /**
+ * v2.8.1 — validate that a string is a safe subagent id (matches what
+ * `slugifyName` would produce). Used at READ + WRITE entry points in the
+ * registry to defend against path-traversal attacks via caller-supplied
+ * `inv.subagent`. Without this check, `inv.subagent = "../../../etc/passwd"`
+ * would be normalized by `path.join` and could read arbitrary JSON files.
+ *
+ * Safe form: 1-64 chars, lowercase alphanumerics + dashes, no leading or
+ * trailing dash, no consecutive dashes. Exactly the output shape of
+ * `slugifyName`.
+ */
+export declare function isValidSubagentId(id: string): boolean;
+/**
  * Sanitize a free-form name to a stable id slug. Maps non-alphanumerics to
  * dash, collapses runs, trims edges, lowercases, caps at 64 chars.
  *

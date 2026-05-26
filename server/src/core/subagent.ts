@@ -268,6 +268,24 @@ export const CODE_REVIEW_PANEL_IDS = [
 ] as const;
 
 /**
+ * v2.8.1 — validate that a string is a safe subagent id (matches what
+ * `slugifyName` would produce). Used at READ + WRITE entry points in the
+ * registry to defend against path-traversal attacks via caller-supplied
+ * `inv.subagent`. Without this check, `inv.subagent = "../../../etc/passwd"`
+ * would be normalized by `path.join` and could read arbitrary JSON files.
+ *
+ * Safe form: 1-64 chars, lowercase alphanumerics + dashes, no leading or
+ * trailing dash, no consecutive dashes. Exactly the output shape of
+ * `slugifyName`.
+ */
+export function isValidSubagentId(id: string): boolean {
+  if (typeof id !== 'string') return false;
+  if (id.length === 0 || id.length > 64) return false;
+  // Idempotent check: anything slugifyName would re-derive identically is valid.
+  return slugifyName(id) === id;
+}
+
+/**
  * Sanitize a free-form name to a stable id slug. Maps non-alphanumerics to
  * dash, collapses runs, trims edges, lowercases, caps at 64 chars.
  *
