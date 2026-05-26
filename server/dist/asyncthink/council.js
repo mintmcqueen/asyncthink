@@ -1,298 +1,226 @@
 /**
  * Council — parallel competitor forks for an asyncthink chain.
  *
- * Each chain has a parentThreadId. Forks within the chain are child threads
- * named `<parentThreadId>::<forkId>`. Tasks in the TaskStore use the same
- * scoping so concurrent chains do not collide.
+ * v2.9.0 refactor: forks now dispatch through `TaskExecutor.start()` and
+ * Council waits for completion via `taskExecutor.result(taskId)` (which
+ * resolves when the task reaches a terminal state — internally event-driven,
+ * no shared timeout race). The previous in-flight Promise + shared
+ * `Promise.race([allForks, timeout(180s)])` architecture was replaced
+ * because a single tight timeout cut off healthy long-running forks
+ * (claude haiku panels routinely exceeded the 180s default in playtests).
  *
- * Forks are fire-and-forget: `fork()` returns immediately after registering
- * the in-flight promise. Results land in the TaskStore as the adapter
- * promises resolve. Callers retrieve results via `getResult` or block until
- * complete via `waitFor`. On chain end, `endChain` waits for any remaining
- * in-flight forks (up to a timeout), closes all child threads, and prunes
- * the chain's tasks from the store.
+ * The new model:
+ *   - Each fork is a Task in the TaskStore (already was; now uniformly
+ *     created via `taskExecutor.start({detached: false})`).
+ *   - `Council.endChain()` awaits `taskExecutor.result(taskId)` per
+ *     non-detached fork. Each resolves when its adapter's natural
+ *     timeline lands (per-adapter `defaultTimeoutMs` still applies as
+ *     the per-fork bound).
+ *   - A configurable safety ceiling (`ceilingMs`, default 15 minutes via
+ *     `defaults.chainEndTimeoutMs`) catches genuine runaway cases.
+ *
+ * Detached forks (R-DUR-D.1) bypass chain-end as before: they survive
+ * past the final thought, are reaped only by category TTL, and are
+ * queryable via `tasks_get` / `tasks_result`.
+ *
+ * Pre-flight gates (R-DIAG-D.4 auth, R6a-D.5 rate-limit) and thread
+ * lifecycle (open/close + audit) all happen inside `TaskExecutor.start`
+ * + `runTask`. Council no longer needs its own adapter.invoke call site
+ * or `CouncilGates` injection — those were duplicated v2.3.1 (H1+H2) work
+ * that's now subsumed by the unified task pipeline.
  */
 import { randomUUID } from 'crypto';
-import { AdapterError } from '../core/adapterError.js';
-import { resolveModel } from '../adapters/tierResolver.js';
-import { cleanupCodexOverlay } from '../adapters/codexOverlay.js';
+/**
+ * Default safety ceiling for `endChain`. The expected-wait is much
+ * shorter (per-adapter timeouts dominate); this is the absolute outer
+ * bound on how long we'll block before returning whatever results we
+ * have. Configurable via `defaults.chainEndTimeoutMs` in settings.
+ */
+export const DEFAULT_CHAIN_END_CEILING_MS = 15 * 60 * 1000;
 export class Council {
-    adapters;
-    threadStore;
+    taskExecutor;
     taskStore;
-    executor;
-    auditLog;
-    gates;
-    manifests;
-    inflight = new Map();
-    constructor(adapters, threadStore, taskStore, executor, auditLog, 
     /**
-     * v2.3.1 (H1+H2): optional pre-flight gates. When wired (via app.ts),
-     * sync forks honor `preflight: 'auth'` and the R6a-D.5 rate-limit refuse.
-     * Tests that build Council directly without gates keep working.
+     * AsyncThink-side mapping: `<parentThreadId>::<forkId>` → TaskExecutor taskId.
+     * Lets us look up the right task when callers ask by forkId.
+     *
+     * v2.9.0 — replaces the old `Map<scopedTaskId, Promise<void>>` in-flight
+     * tracker. The tasks themselves are the source of truth; this map just
+     * records which forkId in which chain each task belongs to.
      */
-    gates, manifests) {
-        this.adapters = adapters;
-        this.threadStore = threadStore;
+    fork2task = new Map();
+    constructor(taskExecutor, taskStore) {
+        this.taskExecutor = taskExecutor;
         this.taskStore = taskStore;
-        this.executor = executor;
-        this.auditLog = auditLog;
-        this.gates = gates;
-        this.manifests = manifests;
     }
     newChain() {
         return `chain-${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`;
     }
-    /** Spawn a fork. Resolves once the task is registered (not when it completes). */
+    /**
+     * Spawn a fork. Returns immediately once the task is registered (status
+     * `working` in the TaskStore). The adapter call happens asynchronously
+     * inside TaskExecutor.runTask.
+     */
     async fork(req) {
-        const adapter = this.adapters.get(req.adapter);
-        if (!adapter) {
-            const known = this.adapters.list().map((a) => a.id).join(', ');
-            throw new Error(`Unknown adapter "${req.adapter}". Registered: ${known}`);
-        }
-        const taskId = this.scopeId(req.parentThreadId, req.id);
-        if (await this.taskStore.get(taskId)) {
+        const forkScopedId = this.scopeId(req.parentThreadId, req.id);
+        if (this.fork2task.has(forkScopedId)) {
             throw new Error(`Fork id "${req.id}" already exists in chain ${req.parentThreadId}`);
         }
-        await this.taskStore.create(taskId, req.prompt);
-        await this.taskStore.update(taskId, {
-            status: 'running',
-            forkThought: req.thoughtNumber,
+        const state = await this.taskExecutor.start({
             adapter: req.adapter,
+            prompt: req.prompt,
+            files: req.files,
+            intelligence: req.intelligence,
+            model: req.model,
+            mcpServers: req.mcpServers,
+            preflight: req.preflight,
+            authPath: req.authPath,
+            bypassRateLimit: req.bypassRateLimit,
+            subagent: req.subagent,
+            principal: null, // v2.2 single-tenant; populated from OAuth in v3.
+            detached: false, // Non-detached forks are reaped at chain end.
+            threadId: forkScopedId,
+            parentChainId: req.parentThreadId,
+            skill: req.skill,
         });
-        const childThreadId = taskId;
-        const promise = this.runFork(adapter, childThreadId, taskId, req).finally(() => {
-            this.inflight.delete(taskId);
-        });
-        this.inflight.set(taskId, promise);
+        this.fork2task.set(forkScopedId, state.taskId);
     }
-    async runFork(adapter, childThreadId, taskId, req) {
-        try {
-            // v2.3.1 (H1+H2): apply the pre-flight gates if the executor was wired
-            // through. Auth gate runs when req.preflight==='auth'. Rate-limit gate
-            // runs unconditionally for rate-limited tier cells; throws AdapterError
-            // when over budget so the catch below classifies it as a typed failure.
-            let rateLimitSlotPush;
-            if (this.gates) {
-                if (req.preflight === 'auth') {
-                    this.gates.applyAuthGate(req.adapter, null /* v2.2 single-tenant */, req.model);
-                }
-                const manifest = this.manifests ? await this.manifests.get(req.adapter) : undefined;
-                if (manifest) {
-                    const resolved = resolveModel({ prompt: req.prompt, intelligence: req.intelligence, model: req.model, files: req.files }, manifest.tiers, manifest.defaultTier, { adapterId: req.adapter, tierLimits: manifest.tierLimits });
-                    if (resolved.limits?.rateLimit) {
-                        rateLimitSlotPush = await this.gates.applyRateLimitGate({
-                            adapter: req.adapter,
-                            prompt: req.prompt,
-                            files: req.files,
-                            principal: null,
-                            resolvedModel: resolved.model,
-                            resolvedTier: resolved.tier,
-                            rateLimit: resolved.limits.rateLimit,
-                            // v2.3.3 — forward caller flexibility levers.
-                            authPathOverride: req.authPath,
-                            bypassRateLimit: req.bypassRateLimit,
-                        });
-                        // v2.3.3: bypass audit event paired with the fork's taskId.
-                        if (req.bypassRateLimit) {
-                            await this.auditLog?.record({
-                                kind: 'task.bypass_rate_limit',
-                                taskId,
-                                adapter: req.adapter,
-                                authPath: req.authPath,
-                                reason: 'council-fork-opt-out',
-                            });
-                        }
-                    }
-                }
-            }
-            await this.threadStore.open(childThreadId, adapter.id);
-            await this.auditLog?.record({
-                kind: 'thread.open',
-                threadId: childThreadId,
-                adapter: adapter.id,
-            });
-            await this.threadStore.append(childThreadId, {
-                ts: new Date().toISOString(),
-                role: 'user',
-                adapter: adapter.id,
-                content: req.prompt,
-            });
-            const result = await adapter.invoke({
-                prompt: req.prompt,
-                files: req.files,
-                intelligence: req.intelligence,
-                model: req.model,
-                // v2.3 (F3-D.2) — additive MCP-server allowlist passes through.
-                mcpServers: req.mcpServers,
-                // v2.5.0 — threadId for codex $CODEX_HOME overlay scoping.
-                threadId: childThreadId,
-                // v2.7.0 — per-fork subagent override for claude subscription auth.
-                subagent: req.subagent,
-            }, this.executor);
-            // v2.3.1 (B2): consume the rate-limit slot only after invoke succeeds.
-            if (rateLimitSlotPush)
-                rateLimitSlotPush();
-            await this.threadStore.append(childThreadId, {
-                ts: new Date().toISOString(),
-                role: 'assistant',
-                adapter: adapter.id,
-                sessionId: result.sessionId,
-                content: result.text,
-                meta: { durationMs: result.durationMs, exitCode: result.exitCode },
-            });
-            await this.taskStore.update(taskId, {
-                status: result.exitCode === 0 ? 'complete' : 'failed',
-                result: result.text,
-                error: result.exitCode !== 0 ? `exit code ${result.exitCode}` : undefined,
-                durationMs: result.durationMs,
-            });
-            await this.auditLog?.record({
-                kind: 'invoke',
-                adapter: adapter.id,
-                durationMs: result.durationMs,
-                threadId: childThreadId,
-                error: result.exitCode !== 0 ? `exit code ${result.exitCode}` : undefined,
-            });
-        }
-        catch (err) {
-            // v2.3 (F3-D.4 / R-DIAG-D.1): treat AdapterError-throwing adapters as
-            // typed failures. Persist kind + actionable into TaskState for the
-            // council aggregation surface.
-            const message = err instanceof Error ? err.message : String(err);
-            let errorKind;
-            let errorActionable;
-            if (err instanceof AdapterError) {
-                errorKind = err.kind;
-                errorActionable = err.actionable;
-            }
-            await this.taskStore.update(taskId, {
-                status: 'failed',
-                error: message,
-                errorKind,
-                errorActionable,
-            });
-            await this.auditLog?.record({
-                kind: 'invoke',
-                adapter: adapter.id,
-                durationMs: 0,
-                threadId: childThreadId,
-                error: message,
-            });
-        }
-    }
-    /** Wait for any of the named forks (chain-scoped) to settle, up to timeoutMs. */
+    /**
+     * Wait for the named forks to settle. Uses `taskExecutor.result` which
+     * blocks until terminal — no shared timeout race. The `timeoutMs` arg
+     * is preserved as a safety ceiling (same semantics as endChain).
+     */
     async waitFor(forkIds, parentThreadId, timeoutMs) {
-        const promises = forkIds
-            .map((id) => this.inflight.get(this.scopeId(parentThreadId, id)))
-            .filter((p) => p !== undefined);
-        if (promises.length === 0)
+        const taskIds = forkIds
+            .map((id) => this.fork2task.get(this.scopeId(parentThreadId, id)))
+            .filter((t) => t !== undefined);
+        if (taskIds.length === 0)
             return;
         await Promise.race([
-            Promise.allSettled(promises),
+            Promise.allSettled(taskIds.map((tid) => this.taskExecutor.result(tid).catch(() => null))),
             new Promise((resolve) => setTimeout(resolve, timeoutMs)),
         ]);
     }
+    /**
+     * Look up the current state of one fork. Reads from the TaskStore via
+     * the executor — non-blocking. Returns undefined if the fork isn't
+     * known to this Council instance.
+     */
     async getResult(forkId, parentThreadId) {
-        const state = await this.taskStore.get(this.scopeId(parentThreadId, forkId));
+        const taskId = this.fork2task.get(this.scopeId(parentThreadId, forkId));
+        if (!taskId)
+            return undefined;
+        // We read taskStore directly (not executor.get) because the latter
+        // wraps state in TaskExecutorState which drops errorKind /
+        // errorActionable. Council surfaces those for the v2.3 R-DIAG-D.5
+        // diagnostic envelope. Both share the same underlying FsTaskStore.
+        const state = await this.taskStore.get(taskId);
         if (!state)
             return undefined;
-        return resultFromTask(state, forkId, parentThreadId);
+        return councilResultFromTaskState(state, forkId);
     }
+    /**
+     * Snapshot the chain's fork statuses (pending / complete / failed).
+     * Reads from in-memory tracking + TaskStore — fast, no awaits except
+     * the parallel store reads.
+     */
     async chainStatus(parentThreadId) {
         const prefix = `${parentThreadId}::`;
-        const trim = (id) => id.slice(prefix.length);
         const pending = [];
         const complete = [];
         const failed = [];
-        for (const t of await this.taskStore.byStatus('pending')) {
-            if (t.id.startsWith(prefix))
-                pending.push(trim(t.id));
-        }
-        for (const t of await this.taskStore.byStatus('running')) {
-            if (t.id.startsWith(prefix))
-                pending.push(trim(t.id));
-        }
-        for (const t of await this.taskStore.byStatus('complete')) {
-            if (t.id.startsWith(prefix))
-                complete.push(trim(t.id));
-        }
-        for (const t of await this.taskStore.byStatus('failed')) {
-            if (t.id.startsWith(prefix))
-                failed.push(trim(t.id));
+        for (const [scopedId, taskId] of this.fork2task) {
+            if (!scopedId.startsWith(prefix))
+                continue;
+            const forkId = scopedId.slice(prefix.length);
+            const state = await this.taskStore.get(taskId);
+            if (!state) {
+                // Task evaporated (manual delete, TTL sweeper). Treat as failed
+                // for diagnostic visibility rather than silently dropping.
+                failed.push(forkId);
+                continue;
+            }
+            const status = state.status;
+            // Translate from on-disk schema (v1 + v2.2) to the council
+            // pending/complete/failed buckets. v1: pending/running/complete/failed.
+            // v2.2: working/completed/failed/cancelled/input_required.
+            if (status === 'complete' ||
+                status === 'completed') {
+                complete.push(forkId);
+            }
+            else if (status === 'failed' ||
+                status === 'cancelled') {
+                failed.push(forkId);
+            }
+            else {
+                // pending / running / working / input_required → still pending.
+                pending.push(forkId);
+            }
         }
         return { pending, complete, failed };
     }
     /**
-     * Wait for non-detached forks in the chain, close their child threads,
-     * prune their tasks. Detached forks (R-DUR-D.1) are immune: they survive
-     * past chain end and are reaped by the TTL sweeper.
+     * Wait for non-detached forks in the chain to reach terminal status,
+     * then return their results.
+     *
+     * The safety ceiling (`ceilingMs`) is an absolute outer bound — the
+     * expected wait is dominated by per-adapter `defaultTimeoutMs`. Forks
+     * resolve naturally on their `taskExecutor.result()` promise; if a
+     * fork never terminates (genuine hang), the ceiling unblocks the
+     * chain so the caller isn't stuck.
+     *
+     * Detached forks (R-DUR-D.1) survive past chain end — they're skipped
+     * here and reaped via category TTL by the sweeper.
+     *
+     * Cleanup (closing child threads, reaping codex overlays, deleting
+     * task state) happens inside `TaskExecutor.runTask` when each task
+     * reaches terminal — Council doesn't repeat that work.
      */
-    async endChain(parentThreadId, timeoutMs) {
+    async endChain(parentThreadId, ceilingMs = DEFAULT_CHAIN_END_CEILING_MS) {
         const prefix = `${parentThreadId}::`;
-        // Collect detached task ids so we exclude them from chain-end work.
-        const detachedIds = new Set();
-        if (this.taskStore.list) {
-            for (const t of await this.taskStore.list()) {
-                if (t.id.startsWith(prefix) && t.detached === true) {
-                    detachedIds.add(t.id);
-                }
+        const chainEntries = [...this.fork2task.entries()].filter(([scopedId]) => scopedId.startsWith(prefix));
+        // Identify detached vs non-detached forks. Detached survive chain end.
+        const nonDetached = [];
+        for (const [scopedId, taskId] of chainEntries) {
+            const state = await this.taskStore.get(taskId);
+            if (!state)
+                continue; // Task disappeared; skip silently.
+            const detached = state.detached === true;
+            if (!detached) {
+                nonDetached.push({
+                    forkId: scopedId.slice(prefix.length),
+                    taskId,
+                });
             }
         }
-        const promises = [];
-        for (const [tid, p] of this.inflight) {
-            if (tid.startsWith(prefix) && !detachedIds.has(tid))
-                promises.push(p);
-        }
-        if (promises.length > 0) {
+        // Wait for non-detached forks to terminal. Per-task result() resolves
+        // independently — one slow fork doesn't hold up the rest.
+        if (nonDetached.length > 0) {
             await Promise.race([
-                Promise.allSettled(promises),
-                new Promise((resolve) => setTimeout(resolve, timeoutMs)),
+                Promise.allSettled(nonDetached.map(({ taskId }) => this.taskExecutor.result(taskId).catch(() => null))),
+                new Promise((resolve) => setTimeout(resolve, ceilingMs)),
             ]);
         }
+        // Build the result envelope. Read final state from taskStore (gives us
+        // errorKind / errorActionable that the executor interface drops).
         const results = [];
-        for (const status of [
-            'complete',
-            'completed',
-            'failed',
-            'running',
-            'working',
-            'pending',
-        ]) {
-            for (const t of await this.taskStore.byStatus(status)) {
-                if (!t.id.startsWith(prefix))
-                    continue;
-                if (detachedIds.has(t.id))
-                    continue;
-                const forkId = t.id.slice(prefix.length);
-                const r = resultFromTask(t, forkId, parentThreadId);
-                if (r)
-                    results.push(r);
-            }
-        }
-        // Close child threads (non-detached only).
-        for (const t of await this.threadStore.list()) {
-            if (!t.threadId.startsWith(prefix))
+        for (const { forkId, taskId } of nonDetached) {
+            const state = await this.taskStore.get(taskId);
+            if (!state)
                 continue;
-            if (detachedIds.has(t.threadId))
-                continue;
-            await this.threadStore.close(t.threadId);
-            await this.auditLog?.record({
-                kind: 'thread.close',
-                threadId: t.threadId,
-                adapter: t.adapter,
-            });
-            // v2.5.0 — reap codex $CODEX_HOME overlay for codex forks.
-            try {
-                await cleanupCodexOverlay(t.threadId);
-            }
-            catch {
-                /* best-effort */
-            }
+            const r = councilResultFromTaskState(state, forkId);
+            if (r)
+                results.push(r);
         }
-        // Prune tasks from the store.
-        for (const r of results) {
-            await this.taskStore.delete(this.scopeId(parentThreadId, r.id));
+        // Drop tracking for this chain's non-detached forks. TaskExecutor's
+        // sweeper handles the actual task-state cleanup per category TTL.
+        for (const { taskId } of nonDetached) {
+            for (const [k, v] of this.fork2task) {
+                if (v === taskId) {
+                    this.fork2task.delete(k);
+                    break;
+                }
+            }
         }
         return results;
     }
@@ -300,15 +228,36 @@ export class Council {
         return `${parentThreadId}::${forkId}`;
     }
 }
-function resultFromTask(state, forkId, _parentThreadId) {
+/**
+ * Translate a TaskStore record (v1 + v2.2 fields blended) into the
+ * Council's caller-facing shape. CouncilResult.status is kept as the
+ * legacy v1 TaskStatus enum (`pending|running|complete|failed`) so
+ * existing callers continue to see the same wire shape; v2.2 statuses
+ * (`working`/`completed`/`cancelled`/`input_required`) are folded in.
+ */
+function councilResultFromTaskState(state, forkId) {
+    // Status translation — keep the legacy enum on the wire.
+    let status = state.status;
+    if (state.status === 'completed')
+        status = 'complete';
+    if (state.status === 'cancelled')
+        status = 'failed';
+    if (state.status === 'working')
+        status = 'running';
+    if (state.status === 'input_required')
+        status = 'running';
     return {
         id: forkId,
         adapter: state.adapter ?? 'unknown',
         output: state.result ?? '',
-        status: state.status,
-        error: state.error,
+        status,
+        error: state.error ??
+            (state.status === 'cancelled' ? 'cancelled' : undefined),
         durationMs: state.durationMs,
         errorKind: state.errorKind,
         errorActionable: state.errorActionable,
     };
 }
+// Re-exported for tests/diagnostics that want to project a raw TaskState
+// into Council shape without going through the registry.
+export { councilResultFromTaskState as __councilResultFromTaskState };

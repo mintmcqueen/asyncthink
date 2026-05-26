@@ -47,6 +47,18 @@ export interface SettingsValues {
      * works identically across subscription / api / vertex / bedrock paths.
      */
     injectSubagent?: boolean;
+    /**
+     * v2.9.0 — safety ceiling for `Council.endChain` and `Council.waitFor`.
+     * NOT the expected wait — per-adapter `defaultTimeoutMs` (claude 300s,
+     * codex 180s, gemini 180s) bounds individual forks. This is the
+     * absolute outer bound on how long Council will block before
+     * returning whatever results are available.
+     *
+     * Replaces the previous hard-coded `DEFAULT_FORK_TIMEOUT_MS = 180_000`
+     * that cut off healthy long-running claude-haiku panels. Default:
+     * 900_000ms (15 min). Range: enforced ≥60_000 in `validateKey`.
+     */
+    chainEndTimeoutMs?: number;
   };
 }
 
@@ -100,6 +112,10 @@ export const BUILTIN_DEFAULTS: SettingsValues = {
     adapter: 'claude',
     subagent: 'asyncthink-delegate',
     injectSubagent: true,
+    // v2.9.0 — 15 minute safety ceiling for chain-end waits. Expected wait
+    // is dominated by per-adapter defaultTimeoutMs (claude 300s, codex 180s,
+    // gemini 180s). The ceiling is the outer bound on runaway forks.
+    chainEndTimeoutMs: 900_000,
   },
 };
 
@@ -217,10 +233,21 @@ export function validateKey(
       }
       return { valid: true };
     }
+    case 'defaults.chainEndTimeoutMs': {
+      if (typeof value !== 'number' || !Number.isFinite(value) || value < 60_000) {
+        return {
+          valid: false,
+          reason: 'defaults.chainEndTimeoutMs must be a number >= 60000 (60 seconds).',
+        };
+      }
+      return { valid: true };
+    }
     default:
       return {
         valid: false,
-        reason: `unknown setting key "${key}". Known keys: defaults.adapter, defaults.subagent, defaults.injectSubagent.`,
+        reason:
+          `unknown setting key "${key}". Known keys: defaults.adapter, ` +
+          `defaults.subagent, defaults.injectSubagent, defaults.chainEndTimeoutMs.`,
       };
   }
 }

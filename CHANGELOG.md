@@ -10,6 +10,44 @@ All notable changes to AsyncThink are documented here. The format follows [Keep 
 - Set plugin and marketplace author to `mintmcqueen`.
 - GitHub default branch set to `develop` so plugin installs pull v2 code by default.
 
+## [2.9.0] — 2026-05-26
+
+Council refactored to task-based polling (SEP-1686 native). Per-fork waits replace the shared 180s timeout that cut off healthy long-running claude-haiku panels in the 2026-05-24 playtest.
+
+### Why
+The v2.8.0 playtest ran `/asyncthink:review-pr` with 4 claude-haiku forks. Two completed in 137s and 224s; the other two were still running past `Council.endChain`'s `DEFAULT_FORK_TIMEOUT_MS = 180_000` shared race, so they returned `status: "running"` despite no actual problem. One slow fork could starve the whole chain.
+
+MCP has no push-notification primitive (confirmed via research — SEP-1686 Tasks is poll-based; the 2026 roadmap reserves room for `notifications/tasks/completed` but it's not shipped). The right fix is independent per-fork waits via `taskExecutor.result(taskId)`, which already blocks until terminal — internally event-driven, no shared race.
+
+### Architectural change
+- **Council now dispatches forks through `TaskExecutor.start({detached: false})`** instead of calling `adapter.invoke` directly.
+- **`Council.endChain` / `Council.waitFor` await `taskExecutor.result(taskId)` per fork.** Each resolves independently; one slow fork doesn't block others.
+- Constructor signature changed: `new Council(taskExecutor, taskStore)` — seven dependencies down to two.
+- **Removed `CouncilGates` interface entirely.** v2.3.1 (H1+H2) wired pre-flight gates into Council so sync forks got the same auth/rate-limit treatment as async forks. Under the unified pipeline, `TaskExecutor.start` applies those gates once for both.
+- **Removed `Council.runFork`.** Adapter invocation, thread lifecycle, audit-event emission, and rate-limit slot accounting all move to `TaskExecutor.runTask`.
+- **Removed in-flight `Map<scopedId, Promise<void>>`.** Replaced with `Map<scopedId, taskId>` — tasks themselves are the source of truth.
+
+### Added — `defaults.chainEndTimeoutMs` safety ceiling
+- New whitelisted setting, default `900_000` (15 min). NOT the expected wait — per-adapter `defaultTimeoutMs` (claude 300s, codex 180s, gemini 180s) bounds individual forks. This is the absolute outer bound on how long `endChain` / `waitFor` will block before returning whatever results are available.
+- `asyncthink.tool` reads the setting before each `endChain`/`waitFor` call.
+- `validateKey('defaults.chainEndTimeoutMs', n)` requires `typeof n === 'number' && n >= 60_000`.
+- New export `DEFAULT_CHAIN_END_CEILING_MS` from `council.ts`.
+
+### Tests
+- 378 tests pass (was 377). 1 new regression spec: "fork that takes 500ms (longer than the OLD 180ms hardcode would have allowed) completes when ceiling is 5s." Proves the per-fork-wait architecture.
+- All 3 integration tests (asyncthinkChain, mcpServersPropagation, subagentPropagation) updated to the new two-arg `Council` constructor. Each now wires `LocalInProcessTaskExecutor` explicitly — matches production `app.ts` shape.
+- Council unit's `fork registers the task and returns immediately` flipped to assert via `council.chainStatus()` (the status namespace differs between v1 `'running'` and v2.2 `'working'`; the public API normalizes both to `pending`).
+
+### Migration
+- Callers of `Council` direct (in-tree tests + `app.ts` only) need the new constructor signature.
+- Tool surface (`delegate`, `asyncthink`, `tasks_*`) is unchanged. Wire compatibility preserved end-to-end.
+- Per-call argument shapes unchanged.
+- `defaults.chainEndTimeoutMs` is additive — old settings files keep working.
+
+### Internal cleanups
+- `app.ts`: Council construction is now one line.
+- ~150 LOC removed from `council.ts` (gates, runFork, in-flight tracking, manual thread/audit lifecycle).
+
 ## [2.8.1] — 2026-05-25
 
 **Path-traversal fix in subagent registry.** Caught by AsyncThink's own `security-review` panel reviewer (the v2.7 built-in subagent) when run against the v2.8.0 diff via `/asyncthink:review-pr`. The persona caught exactly the kind of bug it's designed to catch — strong validation of both the subagent system and the v2.8.0 injection design that made the panel work on api path.

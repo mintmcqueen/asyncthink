@@ -31,6 +31,10 @@ export const BUILTIN_DEFAULTS = {
         adapter: 'claude',
         subagent: 'asyncthink-delegate',
         injectSubagent: true,
+        // v2.9.0 — 15 minute safety ceiling for chain-end waits. Expected wait
+        // is dominated by per-adapter defaultTimeoutMs (claude 300s, codex 180s,
+        // gemini 180s). The ceiling is the outer bound on runaway forks.
+        chainEndTimeoutMs: 900_000,
     },
 };
 /**
@@ -138,10 +142,20 @@ export function validateKey(key, value) {
             }
             return { valid: true };
         }
+        case 'defaults.chainEndTimeoutMs': {
+            if (typeof value !== 'number' || !Number.isFinite(value) || value < 60_000) {
+                return {
+                    valid: false,
+                    reason: 'defaults.chainEndTimeoutMs must be a number >= 60000 (60 seconds).',
+                };
+            }
+            return { valid: true };
+        }
         default:
             return {
                 valid: false,
-                reason: `unknown setting key "${key}". Known keys: defaults.adapter, defaults.subagent, defaults.injectSubagent.`,
+                reason: `unknown setting key "${key}". Known keys: defaults.adapter, ` +
+                    `defaults.subagent, defaults.injectSubagent, defaults.chainEndTimeoutMs.`,
             };
     }
 }
